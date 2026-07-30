@@ -1,0 +1,136 @@
+name: llmhell
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ${PROJECTS_HOST_DIR:-./data/projects}:/data/projects
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Must be a host bind mount, not a named volume: the worker asks the
+      # *host* daemon (over the socket below) to bind-mount a project's
+      # workspace into a sandbox container, so that path has to resolve on
+      # the host, not just inside this container. PROJECTS_HOST_DIR (host
+      # path) and PROJECTS_DIR (this container's view of the same path,
+      # /data/projects) must point at the same directory - see
+      # app/services/sandbox/base.py:workspace_host_path.
+      - ${PROJECTS_HOST_DIR:-./data/projects}:/data/projects
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["arq", "app.workers.run_worker.WorkerSettings"]
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3080:80"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - postgres
+    ports:
+      - "3000:3000"
+
+  mock-vllm:
+    build:
+      context: ./tools
+      dockerfile: Dockerfile.mock_vllm
+    restart: unless-stopped
+    profiles: ["dev"]
+    ports:
+      - "127.0.0.1:8001:8000"
+
+  # Never started as a running service (hence the profile that excludes it
+  # from `up`) - this entry only exists so `docker compose build runner`
+  # builds and tags the sandbox image the worker creates containers from.
+  # `docker compose build` without an argument builds it too.
+  runner:
+    build:
+      context: ./runner
+      dockerfile: Dockerfile
+    image: ${SANDBOX_IMAGE:-llmhell-runner:latest}
+    profiles: ["build-only"]
+
+volumes:
+  pg_data:
+  redis_data:
+  prom_data:
+  grafana_data:

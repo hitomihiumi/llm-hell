@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+build/
+data/
+*.log
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+grafana/data/
+prometheus/data/
