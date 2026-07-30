@@ -1,13 +1,18 @@
 apiVersion: 1
 
 datasources:
+  # Fixed uids so the provisioned dashboards in grafana/dashboards/*.json can
+  # reference a stable datasource id instead of one Grafana would otherwise
+  # generate on its own per provisioning run.
   - name: Prometheus
+    uid: prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
 
   - name: Postgres
+    uid: postgres
     type: postgres
     access: proxy
     url: postgres:5432

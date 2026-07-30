@@ -1,0 +1,32 @@
+{
+  "uid": "llmhell-sessions-explorer",
+  "title": "Sessions explorer",
+  "tags": ["llmhell"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-7d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Sessions",
+      "type": "table",
+      "description": "One row per opencode conversation (grouped by the x-session-affinity header opencode sends, or a fallback hash - see services.stats.recorder). There's no panel to click through into anymore: the agent loop runs in opencode on the tester's machine, not in this service.",
+      "gridPos": { "h": 18, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [{ "matcher": { "id": "byName", "options": "cost_usd" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] }]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "table",
+          "rawSql": "SELECT l.session_id, u.username AS \"user\", min(l.created_at) AS \"started\", max(l.created_at) AS \"last_activity\", count(*) AS \"requests\", sum(l.tokens_prompt) AS \"prompt_tokens\", sum(l.tokens_completion) AS \"completion_tokens\", sum(l.tool_call_count) AS \"tool_calls\", sum(l.cost_usd) AS \"cost_usd\", (array_agg(l.model ORDER BY l.created_at))[1] AS \"first_model\" FROM llm_requests l JOIN users u ON u.id = l.user_id GROUP BY l.session_id, u.username ORDER BY min(l.created_at) DESC LIMIT 200"
+        }
+      ]
+    }
+  ]
+}

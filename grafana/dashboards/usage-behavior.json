@@ -1,0 +1,122 @@
+{
+  "uid": "llmhell-usage-behavior",
+  "title": "Usage & behavior",
+  "tags": ["llmhell"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "1m",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active testers per day",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "time_series",
+          "rawSql": "SELECT date_trunc('day', created_at) AS time, count(DISTINCT user_id) AS \"active_users\" FROM llm_requests GROUP BY 1 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Requests per hour",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "time_series",
+          "rawSql": "SELECT date_trunc('hour', created_at) AS time, count(*) AS \"requests\" FROM llm_requests GROUP BY 1 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Requests by model",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "table",
+          "rawSql": "SELECT model, count(*) AS \"requests\" FROM llm_requests GROUP BY model ORDER BY count(*) DESC"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Requests by reasoning level",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "table",
+          "rawSql": "SELECT reasoning_level AS \"level\", count(*) AS \"requests\" FROM llm_requests GROUP BY 1 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Tool calls per request (avg, by model)",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "table",
+          "rawSql": "SELECT model, avg(tool_call_count) AS \"avg_tool_calls\" FROM llm_requests GROUP BY model ORDER BY 2 DESC"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Cost per day",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "time_series",
+          "rawSql": "SELECT date_trunc('day', created_at) AS time, sum(cost_usd) AS \"cost_usd\" FROM llm_requests GROUP BY 1 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Tokens & cost by tester",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [{ "matcher": { "id": "byName", "options": "cost_usd" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] }]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "table",
+          "rawSql": "SELECT u.username, count(*) AS \"requests\", sum(l.tokens_prompt) AS \"prompt_tokens\", sum(l.tokens_completion) AS \"completion_tokens\", sum(l.cost_usd) AS \"cost_usd\" FROM llm_requests l JOIN users u ON u.id = l.user_id GROUP BY u.username ORDER BY sum(l.cost_usd) DESC"
+        }
+      ]
+    }
+  ]
+}

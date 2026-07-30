@@ -93,6 +93,30 @@ def _chunk(id_: str, model: str, delta: dict[str, Any], finish_reason: str | Non
     return f"data: {json.dumps(payload)}\n\n"
 
 
+def _usage_chunk(id_: str, model: str, prompt_tokens: int, completion_tokens: int) -> str:
+    """The client always sends `stream_options: {include_usage: true}`, so
+    a real vLLM/OpenAI server appends one extra chunk after the
+    finish_reason chunk with empty `choices` and a populated `usage`
+    field - mirror that here so `services.llm.client`'s usage handling
+    (and anything built on top of it, like run-level token/cost
+    accounting) has something to see in tests and local dev, not just
+    against a real endpoint.
+    """
+    payload = {
+        "id": id_,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 def _mock_tool_call(tools: list[dict[str, Any]]) -> dict[str, Any]:
     first = tools[0]["function"]
     name = first["name"]
@@ -124,6 +148,7 @@ async def _stream_completion(body: dict[str, Any]):
     no_tools = "-notools" in model
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    completion_text = ""
 
     yield _chunk(completion_id, model, {"role": "assistant"})
 
@@ -133,20 +158,26 @@ async def _stream_completion(body: dict[str, Any]):
             for word in REASONING_TEXT.split():
                 yield _chunk(completion_id, model, {"content": word + " "})
             yield _chunk(completion_id, model, {"content": "</think>"})
+            completion_text += f"<think>{REASONING_TEXT}</think>"
         else:
             for word in REASONING_TEXT.split():
                 yield _chunk(completion_id, model, {"reasoning_content": word + " "})
+            completion_text += REASONING_TEXT
 
     if tools and not no_tools:
         tool_call = _mock_tool_call(tools)
         yield _chunk(completion_id, model, {"tool_calls": [{"index": 0, **tool_call}]})
         yield _chunk(completion_id, model, {}, finish_reason="tool_calls")
+        completion_text += json.dumps(tool_call)
     else:
         content_text = _pick_content_text(body)
         for word in content_text.split(" "):
             yield _chunk(completion_id, model, {"content": word + " "})
         yield _chunk(completion_id, model, {}, finish_reason="stop")
+        completion_text += content_text
 
+    prompt_tokens = _estimate_tokens(json.dumps(body.get("messages", [])))
+    yield _usage_chunk(completion_id, model, prompt_tokens, _estimate_tokens(completion_text))
     yield "data: [DONE]\n\n"
 
 

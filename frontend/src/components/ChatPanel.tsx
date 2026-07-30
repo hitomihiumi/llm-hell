@@ -17,6 +17,7 @@ import { useState } from "react";
 import type { PlanStepData, ReasoningLevel, RunMode } from "../api/runs";
 import { ContextBar } from "./ContextBar";
 import { type ChatEntry, useRunChat } from "../hooks/useRunChat";
+import { RatingForm } from "./RatingForm";
 
 const REASONING_OPTIONS = [
   { value: "off", label: "Вимкнено" },
@@ -260,6 +261,8 @@ export function ChatPanel({ projectId }: ChatPanelProps) {
               return null;
           }
         })}
+
+        {chat.finished && chat.run && <RatingForm runId={chat.run.id} />}
       </Column>
 
       <Column gap="8" padding="16" style={{ borderTop: "1px solid var(--dm-border-medium)" }}>

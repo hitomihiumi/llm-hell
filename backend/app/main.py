@@ -3,12 +3,8 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.admin_endpoints import router as admin_endpoints_router
-from app.api.admin_invites import router as admin_invites_router
-from app.api.auth import router as auth_router
-from app.api.endpoints_public import router as endpoints_public_router
-from app.api.projects import router as projects_router
-from app.api.runs import router as runs_router
+from app.api.metrics import router as metrics_router
+from app.api.openai_proxy import router as openai_proxy_router
 from app.core.seed import run_seed
 
 logging.basicConfig(level=logging.INFO)
@@ -24,12 +20,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router)
-app.include_router(admin_invites_router)
-app.include_router(admin_endpoints_router)
-app.include_router(projects_router)
-app.include_router(runs_router)
-app.include_router(endpoints_public_router)
+app.include_router(openai_proxy_router)
+app.include_router(metrics_router)
 
 
 @app.on_event("startup")

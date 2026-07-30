@@ -1,37 +1,28 @@
+"""Only seeds the mock vLLM endpoints for local dev (USE_MOCK_VLLM=true) -
+there's no first-admin-user bootstrapping here because there's no login to
+bootstrap for: users and their API keys are created via `manage.py`
+(`create-user`, `issue-key`), which talks to the database directly and
+doesn't need an existing admin session to do so.
+"""
+
 import logging
 
 from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
-from app.core.security import hash_password
 from app.models.endpoint import DEFAULT_REASONING_PROFILE, ModelEndpoint
-from app.models.user import User
 
 logger = logging.getLogger("llmhell.seed")
 settings = get_settings()
 
 
 async def run_seed() -> None:
-    async with SessionLocal() as db:
-        await _seed_admin(db)
-        if settings.use_mock_vllm:
-            await _seed_mock_endpoints(db)
-        await db.commit()
-
-
-async def _seed_admin(db) -> None:
-    user_count = (await db.execute(select(func.count()).select_from(User))).scalar_one()
-    if user_count > 0:
+    if not settings.use_mock_vllm:
         return
-
-    admin = User(
-        username=settings.seed_admin_username,
-        password_hash=hash_password(settings.seed_admin_password),
-        role="admin",
-    )
-    db.add(admin)
-    logger.info("Seeded first admin user %r", settings.seed_admin_username)
+    async with SessionLocal() as db:
+        await _seed_mock_endpoints(db)
+        await db.commit()
 
 
 async def _seed_mock_endpoints(db) -> None:

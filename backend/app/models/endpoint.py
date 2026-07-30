@@ -29,7 +29,9 @@ class ModelEndpoint(Base, TimestampMixin):
     base_url: Mapped[str] = mapped_column(String(512), nullable=False)
     api_key: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     model_id: Mapped[str] = mapped_column(String(256), nullable=False)
-    role: Mapped[str] = mapped_column(String(16), nullable=False)  # planner | executor
+    # Free-form label (e.g. "planner", "executor", "fast") - purely
+    # descriptive under the proxy, which routes by `model` id, not role.
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
     ctx_window: Mapped[int] = mapped_column(Integer, default=32768, nullable=False)
     price_per_mtok_in: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     price_per_mtok_out: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
