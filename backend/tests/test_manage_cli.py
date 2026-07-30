@@ -96,6 +96,20 @@ async def test_list_keys_reports_status(_use_test_db, capsys) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_keys_includes_users_with_no_keys_issued(_use_test_db, capsys) -> None:
+    # A user right after `create-user` but before any `issue-key` must
+    # still show up - otherwise there's no way to tell "no key yet" apart
+    # from "user doesn't exist" just by looking at `list-keys`.
+    await manage.cmd_create_user(Namespace(username="member", role="user"))
+    capsys.readouterr()
+
+    await manage.cmd_list_keys(Namespace(username=None))
+    output = capsys.readouterr().out
+    assert "member" in output
+    assert "no keys issued" in output
+
+
+@pytest.mark.asyncio
 async def test_add_endpoint_then_list(_use_test_db, capsys) -> None:
     await manage.cmd_add_endpoint(
         Namespace(

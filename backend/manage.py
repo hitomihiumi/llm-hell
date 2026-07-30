@@ -74,15 +74,22 @@ async def cmd_revoke_key(args: argparse.Namespace) -> None:
 
 async def cmd_list_keys(args: argparse.Namespace) -> None:
     async with SessionLocal() as db:
-        query = select(ApiKey, User).join(User, User.id == ApiKey.user_id)
+        # LEFT JOIN, not an inner join: a user with zero keys issued yet
+        # is exactly the kind of thing an operator needs to see here (e.g.
+        # "member" right after `create-user` but before `issue-key`), not
+        # something that should silently vanish from the listing.
+        query = select(User, ApiKey).outerjoin(ApiKey, ApiKey.user_id == User.id)
         if args.username:
             query = query.where(User.username == args.username)
         rows = (await db.execute(query.order_by(User.username, ApiKey.created_at))).all()
 
         if not rows:
-            print("no keys found")
+            print("no users found")
             return
-        for api_key, user in rows:
+        for user, api_key in rows:
+            if api_key is None:
+                print(f"{user.username:20} {'(no keys issued)':20}")
+                continue
             status = "revoked" if api_key.revoked_at else "active"
             last_used = api_key.last_used_at.isoformat() if api_key.last_used_at else "never"
             print(f"{user.username:20} {api_key.name:20} {api_key.key_prefix:20} {status:8} last_used={last_used}")
