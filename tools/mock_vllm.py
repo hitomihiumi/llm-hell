@@ -14,6 +14,13 @@ reasoning/tool-call layer needs to handle:
   <base>-notools      ignores the `tools` param, never emits tool_calls
                       (forces the client's json_protocol fallback).
 
+Reasoning output is driven purely by the model suffix, not by a
+`reasoning_effort` request field: the real proxy never sends one (GLM-4.7
+was found to emit corrupted/looping output whenever `reasoning_effort`
+was set to anything at all), so this mock always reasons unless
+`-noreasoning` is in the model id - matching the one real behaviour the
+response-parsing layer actually needs to handle now.
+
 Whenever a request's messages contain the literal "```plan" marker (the
 planner's own instruction text asks for a response fenced that way), a
 canned plan JSON block is returned as content instead of the generic
@@ -139,9 +146,6 @@ def _mock_tool_call(tools: list[dict[str, Any]]) -> dict[str, Any]:
 async def _stream_completion(body: dict[str, Any]):
     model: str = body.get("model", "mock")
     tools = body.get("tools")
-    reasoning_effort = (body.get("reasoning_effort") or "").lower()
-    extra_thinking = ((body.get("chat_template_kwargs") or {}).get("thinking") or {}).get("type")
-    reasoning_requested = reasoning_effort not in ("off", "") or extra_thinking == "enabled"
 
     inline_think = "-inline-think" in model
     no_reasoning = "-noreasoning" in model
@@ -152,7 +156,7 @@ async def _stream_completion(body: dict[str, Any]):
 
     yield _chunk(completion_id, model, {"role": "assistant"})
 
-    if reasoning_requested and not no_reasoning:
+    if not no_reasoning:
         if inline_think:
             yield _chunk(completion_id, model, {"content": "<think>"})
             for word in REASONING_TEXT.split():
@@ -184,9 +188,6 @@ async def _stream_completion(body: dict[str, Any]):
 def _full_completion(body: dict[str, Any]) -> dict[str, Any]:
     model: str = body.get("model", "mock")
     tools = body.get("tools")
-    reasoning_effort = (body.get("reasoning_effort") or "").lower()
-    extra_thinking = ((body.get("chat_template_kwargs") or {}).get("thinking") or {}).get("type")
-    reasoning_requested = reasoning_effort not in ("off", "") or extra_thinking == "enabled"
 
     inline_think = "-inline-think" in model
     no_reasoning = "-noreasoning" in model
@@ -195,7 +196,7 @@ def _full_completion(body: dict[str, Any]) -> dict[str, Any]:
     message: dict[str, Any] = {"role": "assistant", "content": ""}
     finish_reason = "stop"
 
-    if reasoning_requested and not no_reasoning:
+    if not no_reasoning:
         if inline_think:
             message["content"] = f"<think>{REASONING_TEXT}</think>"
         else:

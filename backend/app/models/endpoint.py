@@ -10,13 +10,14 @@ from app.models.base import Base, TimestampMixin, new_uuid, utcnow
 # and consumed by app.services.llm.reasoning. See the plan doc for the
 # rationale: the real vLLM behaviour (reasoning_content vs inline tags,
 # native tool-calls vs none) is unknown until probed against the live pod.
+#
+# There is deliberately no per-level `reasoning_effort` request control
+# here anymore: GLM-4.7 (this project's actual target model) was found to
+# emit corrupted/looping output whenever `reasoning_effort` was set to
+# anything at all, regardless of value, on the vLLM build in use. The
+# proxy never requests a reasoning level - `parse` only describes how to
+# read back whatever reasoning a model emits on its own.
 DEFAULT_REASONING_PROFILE: dict[str, Any] = {
-    "levels": {
-        "off": {"extra_body": {"reasoning_effort": "off"}},
-        "low": {"extra_body": {"reasoning_effort": "low"}},
-        "medium": {"extra_body": {"reasoning_effort": "medium"}},
-        "high": {"extra_body": {"reasoning_effort": "high"}},
-    },
     "parse": {"mode": "auto", "field": "reasoning_content", "tags": ["<think>", "</think>"]},
 }
 

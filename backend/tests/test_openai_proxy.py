@@ -42,13 +42,13 @@ async def test_list_models_requires_auth(api_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_models_publishes_reasoning_level_suffixes(authed_client, test_db_engine) -> None:
+async def test_list_models_publishes_bare_model_id(authed_client, test_db_engine) -> None:
     await _seed_endpoint(test_db_engine)
 
     response = await authed_client.get("/v1/models")
     assert response.status_code == 200
     ids = {m["id"] for m in response.json()["data"]}
-    assert ids == {"glm-4.7", "glm-4.7-low", "glm-4.7-medium", "glm-4.7-high"}
+    assert ids == {"glm-4.7"}
 
 
 @pytest.mark.asyncio
@@ -90,7 +90,7 @@ async def test_chat_completions_non_streaming_passthrough(authed_client, test_db
     response = await authed_client.post(
         "/v1/chat/completions",
         json={
-            "model": "glm-4.7-medium",
+            "model": "glm-4.7",
             "stream": False,
             "messages": [{"role": "user", "content": "hi"}],
         },
@@ -106,8 +106,8 @@ async def test_chat_completions_non_streaming_passthrough(authed_client, test_db
         row = (
             await session.execute(select(LlmRequest).where(LlmRequest.session_id == "sess-non-stream"))
         ).scalar_one()
-        assert row.model == "glm-4.7-medium"
-        assert row.reasoning_level == "medium"
+        assert row.model == "glm-4.7"
+        assert row.reasoning_level == "off"
         assert row.stream is False
         assert row.status_code == 200
         assert row.tokens_prompt > 0
@@ -123,7 +123,7 @@ async def test_chat_completions_streaming_passthrough(authed_client, test_db_eng
         "POST",
         "/v1/chat/completions",
         json={
-            "model": "glm-4.7-medium",
+            "model": "glm-4.7",
             "stream": True,
             "messages": [{"role": "user", "content": "hi"}],
         },

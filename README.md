@@ -8,8 +8,7 @@ loop, tool-calling, and file editing all happen inside opencode, entirely
 out of this service's view. What this service does:
 
 - authenticates each tester by a personal API key,
-- routes a requested `model` id (including a `-{level}` suffix picking a
-  reasoning level, e.g. `glm-4.7-high`) to the right RunPod endpoint,
+- routes a requested `model` id to the right RunPod endpoint,
 - forwards the request byte-for-byte (streaming or not) so nothing about
   opencode's expectations of the response shape gets lost in translation,
 - and records technical metrics (TTFT, tokens, cost, tool-call counts,
@@ -71,7 +70,6 @@ Add a custom provider to `opencode.json` (project-local or
       },
       "models": {
         "glm-4.7": { "name": "GLM 4.7" },
-        "glm-4.7-high": { "name": "GLM 4.7 (reasoning: high)" },
         "glm-4.7-flash": { "name": "GLM 4.7 Flash" }
       }
     }
@@ -82,8 +80,14 @@ Add a custom provider to `opencode.json` (project-local or
 
 `GET /v1/models` reports exactly which model ids are currently valid for
 a given key - it's driven by whatever endpoints `add-endpoint` has
-registered and their `reasoning_profile`, not a fixed list, so check it
-if a model id 404s.
+registered, not a fixed list, so check it if a model id 404s.
+
+There is no way to request a reasoning level/effort from opencode: the
+proxy never sends a `reasoning_effort` field upstream at all, on any
+model. GLM-4.7 (this project's actual target model) was found to emit
+corrupted/looping output whenever that field was set to anything at all,
+regardless of value, so every request just gets whatever reasoning
+behaviour the endpoint does on its own.
 
 ## Production (RunPod-backed)
 

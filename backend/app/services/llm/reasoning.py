@@ -1,28 +1,25 @@
-"""Reasoning-level request building and response parsing.
+"""Response-side reasoning parsing.
 
 The whole point of this module is that the real behaviour of a given vLLM
 deployment (whether it echoes reasoning as a separate `reasoning_content`
 delta field, as inline `<think>...</think>` tags in `content`, or not at
-all; which request field actually toggles it) is unknown until probed
-against the live endpoint. Everything here is driven by the endpoint's
-stored `reasoning_profile`, not hardcoded assumptions, so an admin can
-correct it from the "check endpoint" flow without a code change.
+all) is unknown until probed against the live endpoint. Everything here is
+driven by the endpoint's stored `reasoning_profile`'s `parse` config, not
+hardcoded assumptions, so an admin can correct it from the "check
+endpoint" flow without a code change.
+
+Note: this module used to also *request* a reasoning level via a
+`reasoning_effort` field the caller could vary per request - removed
+after GLM-4.7 (this project's actual target model) was found to emit
+corrupted/looping output whenever `reasoning_effort` was set to anything
+at all upstream, regardless of value. This module now only parses
+whatever reasoning a model emits on its own; it never asks for a level.
 """
 
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-REASONING_LEVELS = ("off", "low", "medium", "high")
-ReasoningLevel = Literal["off", "low", "medium", "high"]
-
 ParseMode = Literal["auto", "field", "tags"]
-
-
-def build_extra_body(reasoning_profile: dict[str, Any], level: str) -> dict[str, Any]:
-    """Extra top-level JSON fields to merge into the chat completion request
-    for the given reasoning level, per the endpoint's configured profile."""
-    level_cfg = reasoning_profile.get("levels", {}).get(level, {})
-    return dict(level_cfg.get("extra_body", {}))
 
 
 @dataclass

@@ -13,7 +13,6 @@ import httpx
 from openai import AsyncOpenAI
 
 from app.models.endpoint import ModelEndpoint
-from app.services.llm.reasoning import REASONING_LEVELS, build_extra_body
 from app.services.llm.tokenizer import tokenize_root_url
 from app.services.llm.toolcalls import ToolSpec, build_native_tools
 
@@ -83,8 +82,12 @@ async def _check_tokenize(endpoint: ModelEndpoint, http_client: httpx.AsyncClien
         return False, str(exc)
 
 
-async def _check_level(client: AsyncOpenAI, endpoint: ModelEndpoint, level: str) -> LevelProbeResult:
-    extra_body = build_extra_body(endpoint.reasoning_profile, level)
+async def _check_reasoning(client: AsyncOpenAI, endpoint: ModelEndpoint) -> LevelProbeResult:
+    """Probes the endpoint's default (no requested reasoning level)
+    behaviour. There used to be one of these per reasoning_effort value -
+    removed after GLM-4.7 was found to emit corrupted/looping output
+    whenever reasoning_effort was set to anything at all, so the proxy
+    never sends it and this only checks what the model does on its own."""
     parse_cfg = endpoint.reasoning_profile.get("parse", {})
     field_name = parse_cfg.get("field", "reasoning_content")
     open_tag = (parse_cfg.get("tags") or ["<think>", "</think>"])[0]
@@ -95,14 +98,13 @@ async def _check_level(client: AsyncOpenAI, endpoint: ModelEndpoint, level: str)
             messages=_PROBE_MESSAGE,
             stream=False,
             max_tokens=200,
-            extra_body=extra_body,
         )
         message = response.choices[0].message.model_dump(exclude_none=True)
         content = message.get("content") or ""
         reasoning_present = bool(message.get(field_name))
         tags_present = open_tag in content
         return LevelProbeResult(
-            level=level,
+            level="off",
             ok=True,
             reasoning_content_present=reasoning_present,
             inline_tags_present=tags_present,
@@ -110,7 +112,7 @@ async def _check_level(client: AsyncOpenAI, endpoint: ModelEndpoint, level: str)
         )
     except Exception as exc:  # noqa: BLE001
         return LevelProbeResult(
-            level=level,
+            level="off",
             ok=False,
             reasoning_content_present=False,
             inline_tags_present=False,
@@ -151,7 +153,7 @@ async def check_endpoint(
             tokenize_ok, tokenize_error = await _run(owned_client)
 
     models_ok, models_error = await _check_models(client)
-    levels = [await _check_level(client, endpoint, level) for level in REASONING_LEVELS]
+    levels = [await _check_reasoning(client, endpoint)]
     native_tools_supported, native_tools_error = await _check_native_tools(client, endpoint)
 
     return EndpointProbeReport(
