@@ -16,6 +16,11 @@ services:
       timeout: 5s
       retries: 10
     ports:
+      # Host-side port only (left-hand side) - safe to change if 5432 is
+      # already taken on this machine. The right-hand side is the
+      # container's actual listen port and must stay 5432; so must
+      # POSTGRES_PORT in .env, which is unrelated to this mapping (it's
+      # for api -> postgres traffic *inside* the compose network).
       - "127.0.0.1:5432:5432"
 
   api:
@@ -34,6 +39,13 @@ services:
       # Not loopback-only: this is the OpenAI-compatible endpoint opencode on
       # testers' machines talks to over the network.
       - "8000:8000"
+    extra_hosts:
+      # Lets `manage.py add-endpoint --base-url http://host.docker.internal:PORT/v1`
+      # reach an SSH -L tunnel to RunPod that terminates on this host (a
+      # plain 127.0.0.1-bound tunnel is invisible from inside the container
+      # on native Linux Docker - it must bind 0.0.0.0, see README). Works on
+      # Linux too, not just Docker Desktop, since Docker 20.10.
+      - "host.docker.internal:host-gateway"
 
   prometheus:
     image: prom/prometheus:v2.55.1

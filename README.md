@@ -114,6 +114,26 @@ so admins can adjust `tools_mode` there if the probe's reported handling
 doesn't match; the proxy already forwards streaming and non-streaming
 tool-calling requests as opencode sends them either way.
 
+If RunPod isn't reachable directly (no public port, or you'd rather not
+expose vLLM to the internet) and you're tunneling instead, bind the
+tunnel on `0.0.0.0`, not the default loopback-only - a port only bound to
+127.0.0.1 on this host is invisible from inside the `api` container on
+native Linux Docker:
+
+```bash
+ssh -L 0.0.0.0:8000:127.0.0.1:8000 -L 0.0.0.0:8002:127.0.0.1:8002 <runpod-ssh-target>
+```
+
+then use `host.docker.internal` (routed in via `extra_hosts` in
+`docker-compose.yml`) instead of `<runpod-host>` as the endpoint's host:
+
+```bash
+docker compose exec api python manage.py add-endpoint \
+  --name "GLM 4.7 planner" --base-url http://host.docker.internal:8000/v1 --model-id glm-4.7 --role planner
+docker compose exec api python manage.py add-endpoint \
+  --name "GLM 4.7 Flash executor" --base-url http://host.docker.internal:8002/v1 --model-id glm-4.7-flash --role executor
+```
+
 ## Backend development
 
 ```bash
