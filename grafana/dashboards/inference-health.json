@@ -113,12 +113,13 @@
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Populated once real RunPod vLLM endpoints are added as scrape targets in prometheus/prometheus.yml (empty against mock-vllm, which exposes no /metrics).",
+      "description": "Scraped straight off each vLLM server, not via the proxy - needs both SSH tunnels up and the vllm-* jobs UP in Prometheus (Status -> Targets). Empty against mock-vllm, which exposes no /metrics.",
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "vllm:num_requests_waiting"
+          "expr": "vllm:num_requests_waiting",
+          "legendFormat": "{{model_name}}"
         }
       ]
     },
@@ -128,13 +129,15 @@
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Populated once real RunPod vLLM endpoints are added as scrape targets in prometheus/prometheus.yml (empty against mock-vllm, which exposes no /metrics).",
-      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "description": "Scraped straight off each vLLM server, not via the proxy - needs both SSH tunnels up and the vllm-* jobs UP in Prometheus (Status -> Targets). Empty against mock-vllm, which exposes no /metrics.",
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 }, "overrides": [] },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "vllm:gpu_cache_usage_perc"
+          "comment": "vllm:kv_cache_usage_perc, NOT the older vllm:gpu_cache_usage_perc - the V1 engine renamed it, and querying the old name silently returns nothing rather than erroring.",
+          "expr": "vllm:kv_cache_usage_perc",
+          "legendFormat": "{{model_name}}"
         }
       ]
     }

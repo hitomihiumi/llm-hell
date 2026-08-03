@@ -11,11 +11,15 @@ scrape_configs:
       - targets: ["api:8000"]
 
   - job_name: vllm-glm-4.7
+    # host.docker.internal, not the RunPod host directly: we reach the pod
+    # over an SSH tunnel bound to the Docker host's own loopback (see
+    # README's "Production" section), and containers can't reach a
+    # host-bound 127.0.0.1 port except through this Docker Desktop alias.
     static_configs:
-      - targets: ["<runpod-host>:8000"]
+      - targets: ["host.docker.internal:8010"]
     metrics_path: /metrics
 
   - job_name: vllm-glm-4.7-flash
     static_configs:
-      - targets: ["<runpod-host>:8001"]
+      - targets: ["host.docker.internal:8002"]
     metrics_path: /metrics
