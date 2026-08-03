@@ -55,6 +55,13 @@ services:
       - prom_data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
+    extra_hosts:
+      # Same reason as `api` above: prometheus.yml scrapes the RunPod vLLM
+      # servers through an SSH -L tunnel terminating on this host, so it
+      # needs the same host-gateway alias to see it. Without this the
+      # vllm-* scrape jobs fail DNS resolution outright on native Linux
+      # Docker (host.docker.internal is a Docker Desktop alias otherwise).
+      - "host.docker.internal:host-gateway"
 
   grafana:
     image: grafana/grafana:11.3.0
