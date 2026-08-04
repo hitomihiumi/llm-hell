@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Builds vLLM from source (main branch, for GLM-4.7-Flash's glm4_moe_lite
-# architecture support, which historically only lands there before a
-# stable release), targeting CUDA 13 + Blackwell (SM 12.x/sm_120)
-# explicitly via TORCH_CUDA_ARCH_LIST, then downloads the two model
-# checkpoints (GLM 4.7 AWQ 4-bit + GLM 4.7 Flash FP8) and launches both as
-# vLLM OpenAI-compatible servers.
+# Builds vLLM from source (main branch, where DeepseekV4ForCausalLM support
+# lives), targeting CUDA 13 + Blackwell (SM 12.x/sm_120) explicitly via
+# TORCH_CUDA_ARCH_LIST, then downloads the DeepSeek V4 Flash checkpoint
+# (~167GB, natively FP8) and launches it as a vLLM OpenAI-compatible server.
 #
 # Assumes the pod image already has Python and CUDA 13 (x86_64) installed
 # - everything else (build tooling, torch, vLLM itself, HF download
@@ -12,37 +10,35 @@
 # backend itself (that runs on a separate VPS, not here).
 #
 # Use this script for a genuinely fresh pod, or when the vLLM build itself
-# needs redoing (FORCE_REBUILD_VLLM=true, or bumping VLLM_GIT_REF). If
-# vLLM is already installed and both checkpoints are already fully
-# downloaded, `runpod_start.sh` skips straight to launching the servers -
-# no reason to re-run the build/download machinery just to restart them.
+# needs redoing (FORCE_REBUILD_VLLM=true, or bumping VLLM_GIT_REF). If vLLM
+# is already installed and the checkpoint is already fully downloaded,
+# `start.sh` skips straight to launching the server - no reason to re-run
+# the build/download machinery just to restart it.
 #
 # The built vLLM wheel is cached under VLLM_WHEEL_DIR (default:
 # /workspace/vllm-wheels, i.e. on the pod's persistent volume if one is
 # attached) - a rerun reuses it instead of rebuilding from scratch, which
 # otherwise takes a long time (compiling vLLM's CUDA kernels for a single
 # target architecture is still commonly 30-90+ minutes depending on CPU
-# core count). Set FORCE_REBUILD_VLLM=true in runpod_common.sh to force a
-# fresh build anyway (e.g. after bumping VLLM_GIT_REF).
+# core count). Set FORCE_REBUILD_VLLM=true in common.sh to force a fresh
+# build anyway (e.g. after bumping VLLM_GIT_REF).
 #
-# Safe to rerun: kills anything holding GPU memory (by PID, from
-# nvidia-smi directly - not just a `vllm serve` command-line pattern
-# match, which misses vLLM's renamed EngineCore/Worker subprocesses and
-# was observed to leave a GPU stuck full of orphaned memory across
-# reruns) before starting new servers.
+# Safe to rerun: kills anything holding GPU memory (by PID, from nvidia-smi
+# directly - not just a `vllm serve` command-line pattern match, which
+# misses vLLM's renamed EngineCore/Worker subprocesses and was observed to
+# leave a GPU stuck full of orphaned memory across reruns) before starting
+# the new server.
 #
-# Default GPU split assumes 5x GPUs: 4 for the planner (GLM 4.7, tensor-
-# parallel-size must divide its vocab_size so 3 GPUs doesn't work), 1 for
-# the flash executor (GLM 4.7 Flash). Edit the CONFIG block in
-# runpod_common.sh if your pod's GPU count/topology differs.
+# Defaults assume 8 GPUs, all given to the one model at TP=8. Edit the
+# CONFIG block in common.sh if your pod's GPU count/topology differs.
 #
-# Usage: bash runpod_setup.sh
+# Usage: bash setup.sh
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./runpod_common.sh
-source "$SCRIPT_DIR/common.sh"
+# shellcheck source=./ds_common.sh
+source "$SCRIPT_DIR/ds_common.sh"
 
 mkdir -p "$LOG_DIR" "$VLLM_WHEEL_DIR"
 
@@ -61,9 +57,7 @@ if [ "$(uname -m)" != "x86_64" ]; then
     exit 1
 fi
 
-runpod_check_gpu_overlap
-runpod_check_gpu_topology "planner" "$PLANNER_GPUS" "$PLANNER_TP_SIZE" "$PLANNER_PP_SIZE"
-runpod_check_gpu_topology "flash" "$FLASH_GPUS" "$FLASH_TP_SIZE" "$FLASH_PP_SIZE"
+runpod_check_gpu_topology
 
 # ---------------------------------------------------------------------------
 # Build (or reuse a cached build of) vLLM from source
@@ -171,36 +165,30 @@ export HF_HUB_ENABLE_HF_TRANSFER=1
 # huggingface_hub/issues/3266) - actually uninstalling the package is the
 # only fix confirmed to work, forcing a fall back to plain HTTP/hf_transfer.
 uv pip uninstall --system hf_xet 2>/dev/null || true
-export HF_HUB_DISABLE_XET=0
+export HF_HUB_DISABLE_XET=1
 
 # One-time migration: earlier runs before HF_HOME pointed at /workspace may
 # have left partial/complete downloads under the default root-disk cache -
 # harmless to leave, but they're dead weight eating the ~30GB root disk for
 # no benefit once every download goes through $HF_HOME instead, so reclaim
 # the space if any of that leftover state is still there.
-for stale_dir in \
-    "$HOME/.cache/huggingface/hub/models--${PLANNER_MODEL_REPO/\//--}" \
-    "$HOME/.cache/huggingface/hub/models--${FLASH_MODEL_REPO/\//--}"; do
-    if [ -d "$stale_dir" ]; then
-        echo "==> Removing stale root-disk HF cache entry: $stale_dir"
-        rm -rf "$stale_dir"
-    fi
-done
+stale_dir="$HOME/.cache/huggingface/hub/models--${MODEL_REPO/\//--}"
+if [ -d "$stale_dir" ]; then
+    echo "==> Removing stale root-disk HF cache entry: $stale_dir"
+    rm -rf "$stale_dir"
+fi
 
-echo "==> Downloading $PLANNER_MODEL_REPO"
-hf download "$PLANNER_MODEL_REPO" 2>&1 | tee "$LOG_DIR/download-planner.log"
+# ~167GB, and /workspace on RunPod is a network volume whose usable quota
+# can be well below the size shown in the dashboard - check before spending
+# an hour downloading into a wall.
+echo "==> Free space on \$HF_HOME's volume before download:"
+df -h "$HF_HOME"
 
-echo "==> Downloading $FLASH_MODEL_REPO"
-hf download "$FLASH_MODEL_REPO" 2>&1 | tee "$LOG_DIR/download-flash.log"
+echo "==> Downloading $MODEL_REPO (~167GB)"
+hf download "$MODEL_REPO" 2>&1 | tee "$LOG_DIR/download.log"
 
-start_vllm "planner" "$PLANNER_MODEL_REPO" "$PLANNER_SERVED_NAME" "$PLANNER_PORT" \
-    "$PLANNER_GPUS" "$PLANNER_TP_SIZE" "$PLANNER_PP_SIZE" "$PLANNER_QUANTIZATION" "$PLANNER_KV_CACHE_DTYPE" "$PLANNER_MAX_MODEL_LEN" ""
-
-start_vllm "flash" "$FLASH_MODEL_REPO" "$FLASH_SERVED_NAME" "$FLASH_PORT" \
-    "$FLASH_GPUS" "$FLASH_TP_SIZE" "$FLASH_PP_SIZE" "$FLASH_QUANTIZATION" "$FLASH_KV_CACHE_DTYPE" "$FLASH_MAX_MODEL_LEN" "$FLASH_ENFORCE_EAGER"
-
-wait_for_health "planner" "$PLANNER_PORT"
-wait_for_health "flash" "$FLASH_PORT"
+start_vllm
+wait_for_health
 
 runpod_print_summary
 echo "    vLLM wheel cache: ${VLLM_WHEEL_DIR} (reused on the next run unless FORCE_REBUILD_VLLM=true)"

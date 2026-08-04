@@ -10,7 +10,7 @@ scrape_configs:
     static_configs:
       - targets: ["api:8000"]
 
-  - job_name: vllm-glm-4.7
+  - job_name: vllm-deepseek-v4-flash
     # host.docker.internal, not the RunPod host directly: we reach the pod
     # over an SSH tunnel terminating on this host, and a container can't
     # reach a host-bound port except through this alias (which needs the
