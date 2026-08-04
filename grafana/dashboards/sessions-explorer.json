@@ -24,7 +24,7 @@
           "refId": "A",
           "datasource": { "type": "postgres", "uid": "postgres" },
           "format": "table",
-          "rawSql": "SELECT l.session_id, u.username AS \"user\", min(l.created_at) AS \"started\", max(l.created_at) AS \"last_activity\", count(*) AS \"requests\", sum(l.tokens_prompt) AS \"prompt_tokens\", sum(l.tokens_completion) AS \"completion_tokens\", sum(l.tool_call_count) AS \"tool_calls\", sum(l.cost_usd) AS \"cost_usd\", (array_agg(l.model ORDER BY l.created_at))[1] AS \"first_model\" FROM llm_requests l JOIN users u ON u.id = l.user_id GROUP BY l.session_id, u.username ORDER BY min(l.created_at) DESC LIMIT 200"
+          "rawSql": "SELECT l.session_id, u.username AS \"user\", min(l.created_at) AS \"started\", max(l.created_at) AS \"last_activity\", count(*) AS \"requests\", sum(l.tokens_prompt) AS \"prompt_tokens\", sum(l.tokens_completion) AS \"completion_tokens\", sum(l.tool_call_count) AS \"tool_calls\", (array_agg(l.model ORDER BY l.created_at))[1] AS \"first_model\" FROM llm_requests l JOIN users u ON u.id = l.user_id GROUP BY l.session_id, u.username ORDER BY min(l.created_at) DESC LIMIT 200"
         }
       ]
     }
