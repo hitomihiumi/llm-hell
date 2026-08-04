@@ -72,7 +72,7 @@
       "id": 7,
       "title": "Tokens by tester",
       "type": "table",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
       "datasource": { "type": "postgres", "uid": "postgres" },
       "fieldConfig": {
         "defaults": {},
@@ -83,7 +83,7 @@
           "refId": "A",
           "datasource": { "type": "postgres", "uid": "postgres" },
           "format": "table",
-          "rawSql": "SELECT u.username, count(*) AS \"requests\", sum(l.tokens_prompt) AS \"prompt_tokens\", sum(l.tokens_completion) AS \"completion_tokens\", FROM llm_requests l JOIN users u ON u.id = l.user_id GROUP BY u.username ORDER BY sum(l.cost_usd) DESC"
+          "rawSql": "SELECT u.username, count(*) AS \"requests\", sum(l.tokens_prompt) AS \"prompt_tokens\", sum(l.tokens_completion) AS \"completion_tokens\" FROM llm_requests l JOIN users u ON u.id = l.user_id GROUP BY u.username ORDER BY sum(l.cost_usd) DESC"
         }
       ]
     }
