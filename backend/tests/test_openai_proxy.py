@@ -42,11 +42,23 @@ async def test_list_models_requires_auth(api_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_models_publishes_bare_model_id(authed_client, test_db_engine) -> None:
+async def test_list_models_publishes_one_id_per_reasoning_level(authed_client, test_db_engine) -> None:
     await _seed_endpoint(test_db_engine)
 
     response = await authed_client.get("/v1/models")
     assert response.status_code == 200
+    ids = {m["id"] for m in response.json()["data"]}
+    # "off" publishes bare, every other level gets a suffix.
+    assert ids == {"glm-4.7", "glm-4.7-low", "glm-4.7-medium", "glm-4.7-high"}
+
+
+@pytest.mark.asyncio
+async def test_list_models_publishes_bare_id_when_levels_disabled(authed_client, test_db_engine) -> None:
+    # The escape hatch for a model that misbehaves under reasoning_effort:
+    # clearing `levels` must collapse the endpoint back to a single id.
+    await _seed_endpoint(test_db_engine, reasoning_profile={"parse": {"mode": "auto"}})
+
+    response = await authed_client.get("/v1/models")
     ids = {m["id"] for m in response.json()["data"]}
     assert ids == {"glm-4.7"}
 
@@ -113,6 +125,76 @@ async def test_chat_completions_non_streaming_passthrough(authed_client, test_db
         assert row.tokens_prompt > 0
         assert row.tokens_completion > 0
         assert row.duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_suffixed_model_id_records_level_and_reaches_upstream(authed_client, test_db_engine) -> None:
+    """The whole point of the level mechanism: picking "-high" must both be
+    recorded on the request row and actually change what upstream sees."""
+    await _seed_endpoint(test_db_engine)
+
+    response = await authed_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "glm-4.7-high",
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        headers={"x-session-affinity": "sess-high"},
+    )
+    assert response.status_code == 200
+    # The mock only emits reasoning when it receives a non-"none"
+    # reasoning_effort, so this proves the field survived the hop.
+    assert response.json()["choices"][0]["message"].get("reasoning_content")
+
+    session_maker = async_sessionmaker(test_db_engine, expire_on_commit=False, class_=AsyncSession)
+    async with session_maker() as session:
+        row = (
+            await session.execute(select(LlmRequest).where(LlmRequest.session_id == "sess-high"))
+        ).scalar_one()
+        assert row.model == "glm-4.7-high"   # what the client asked for
+        assert row.reasoning_level == "high"  # resolved from the suffix
+        assert row.tokens_reasoning > 0
+
+
+@pytest.mark.asyncio
+async def test_off_level_sends_none_and_gets_no_reasoning(authed_client, test_db_engine) -> None:
+    await _seed_endpoint(test_db_engine)
+
+    response = await authed_client.post(
+        "/v1/chat/completions",
+        json={"model": "glm-4.7", "stream": False, "messages": [{"role": "user", "content": "hi"}]},
+        headers={"x-session-affinity": "sess-off"},
+    )
+    assert response.status_code == 200
+    assert not response.json()["choices"][0]["message"].get("reasoning_content")
+
+    session_maker = async_sessionmaker(test_db_engine, expire_on_commit=False, class_=AsyncSession)
+    async with session_maker() as session:
+        row = (
+            await session.execute(select(LlmRequest).where(LlmRequest.session_id == "sess-off"))
+        ).scalar_one()
+        assert row.reasoning_level == "off"
+
+
+@pytest.mark.asyncio
+async def test_level_overrides_a_client_supplied_reasoning_effort(authed_client, test_db_engine) -> None:
+    """Two published ids must not collapse into identical behaviour just
+    because a client set reasoning_effort by hand."""
+    await _seed_endpoint(test_db_engine)
+
+    response = await authed_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "glm-4.7",            # the "off" level -> none
+            "reasoning_effort": "high",    # ...but the client asks for high
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert response.status_code == 200
+    # The endpoint's level wins, so no reasoning comes back.
+    assert not response.json()["choices"][0]["message"].get("reasoning_content")
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,7 @@ from app.core.api_keys import CurrentKeyUser
 from app.core.db import get_db
 from app.models.endpoint import ModelEndpoint
 from app.services.llm.model_routing import published_model_ids, resolve_model
-from app.services.llm.reasoning import ReasoningStreamParser
+from app.services.llm.reasoning import ReasoningStreamParser, build_extra_body
 from app.services.stats.recorder import RequestOutcome, extract_session_ids, record_request
 
 router = APIRouter(tags=["proxy"])
@@ -65,9 +65,18 @@ async def list_models(_: CurrentKeyUser, db: AsyncSession = Depends(get_db)) -> 
     return {"object": "list", "data": data}
 
 
-def _build_upstream_request_body(body: dict[str, Any], endpoint: ModelEndpoint) -> dict[str, Any]:
+def _build_upstream_request_body(
+    body: dict[str, Any], endpoint: ModelEndpoint, reasoning_level: str
+) -> dict[str, Any]:
     upstream_body = dict(body)
+    # The client asked for e.g. "deepseek-v4-flash-high"; upstream only
+    # knows the bare model, with the level expressed as a request field.
     upstream_body["model"] = endpoint.model_id
+    # Applied after the client's own fields, deliberately: the level is
+    # part of which model id was selected, so it wins over any
+    # reasoning_effort a client set by hand, which would otherwise make
+    # two different published model ids behave identically.
+    upstream_body.update(build_extra_body(endpoint.reasoning_profile, reasoning_level))
 
     if upstream_body.get("stream"):
         stream_options = dict(upstream_body.get("stream_options") or {})
@@ -208,7 +217,7 @@ async def chat_completions(
         return await _fail(400, "unknown_model", f"unknown model: {requested_model!r}")
 
     endpoint, reasoning_level = resolved
-    upstream_body = _build_upstream_request_body(body, endpoint)
+    upstream_body = _build_upstream_request_body(body, endpoint, reasoning_level)
     upstream_url = endpoint.base_url.rstrip("/") + "/chat/completions"
 
     async def _record(final: RequestOutcome) -> None:

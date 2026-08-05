@@ -281,7 +281,20 @@ echo "==> Installing Hugging Face download tooling"
 # No "[cli]" extra: huggingface_hub 1.x folded the `hf` CLI into the base
 # package and no longer has an extra by that name (uv just warns and
 # installs anyway if you ask for it, but there's no reason to keep asking).
-uv pip install --system --break-system-packages -U huggingface_hub hf_transfer
+# Deliberately NOT -U. Upgrading huggingface_hub unconditionally pulled it
+# to 1.x on an image whose transformers pins huggingface-hub<1.0, and vLLM
+# then refused to start at all:
+#   ImportError: huggingface-hub>=0.34.0,<1.0 is required ... found 1.26.0
+# We only need `hf` to exist; whatever version the image already ships is
+# the one its other packages were resolved against, so leave it alone and
+# install only what's genuinely missing.
+if command -v hf >/dev/null 2>&1; then
+    echo "==> huggingface_hub CLI already present, leaving the image's version alone"
+else
+    uv pip install --system --break-system-packages huggingface_hub
+fi
+uv pip install --system --break-system-packages hf_transfer 2>/dev/null \
+    || echo "==> hf_transfer unavailable, continuing without it (downloads just run slower)"
 
 mkdir -p "$HF_HOME"
 export HF_HOME

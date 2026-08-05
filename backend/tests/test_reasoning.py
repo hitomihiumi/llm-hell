@@ -1,6 +1,17 @@
-from app.services.llm.reasoning import ReasoningStreamParser
+from app.services.llm.reasoning import ReasoningStreamParser, build_extra_body
 
 FIELD_PARSE_CFG = {"mode": "auto", "field": "reasoning_content", "tags": ["<think>", "</think>"]}
+
+
+def test_build_extra_body_reads_configured_level() -> None:
+    profile = {"levels": {"medium": {"extra_body": {"reasoning_effort": "medium"}}}}
+    assert build_extra_body(profile, "medium") == {"reasoning_effort": "medium"}
+    # Unknown level and a profile with no levels at all must both yield an
+    # empty dict, so the request goes upstream with no reasoning field
+    # rather than a wrong one.
+    assert build_extra_body(profile, "missing_level") == {}
+    assert build_extra_body({"parse": {}}, "medium") == {}
+    assert build_extra_body({}, "medium") == {}
 
 
 def test_field_mode_auto_detected_from_first_chunk() -> None:

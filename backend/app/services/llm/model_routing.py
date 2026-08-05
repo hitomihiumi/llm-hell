@@ -1,26 +1,46 @@
-"""Maps a vLLM endpoint's `model_id` to the OpenAI "model" id opencode
-sees for it.
+"""Maps between a single vLLM endpoint (one physical model, one
+`reasoning_profile`) and the several OpenAI "model" ids opencode sees for
+it - one per configured reasoning level.
 
-This used to publish several ids per endpoint - one per reasoning level,
-e.g. "glm-4.7", "glm-4.7-high" - so a tester could pick a
-`reasoning_effort` value by picking a model. Removed after GLM-4.7 (this
-project's actual target model) was found to emit corrupted/looping output
-whenever `reasoning_effort` was set to anything at all upstream,
-regardless of value. One endpoint now always publishes exactly one model
-id; the second element of each tuple stays "off" only because
-`record_request`'s `reasoning_level` column still expects a value.
+opencode has no concept of a reasoning-effort knob; it only picks a model.
+So one endpoint is published under several model ids ("deepseek-v4-flash",
+"deepseek-v4-flash-high", ...) and a tester chooses a reasoning level by
+choosing a model, exactly the way they'd choose between any two models in
+their provider config.
+
+An endpoint with no `levels` in its profile publishes exactly one id, the
+bare `model_id`, and every request against it goes upstream with no
+reasoning field - the escape hatch for a model that misbehaves when asked
+for an effort level (see DEFAULT_REASONING_PROFILE).
 """
 
 from app.models.endpoint import ModelEndpoint
 
+# Published under the bare model_id rather than a "-off" suffix: it is the
+# default a tester gets when they just pick the model by name.
+BASE_LEVEL = "off"
+
 
 def published_model_ids(endpoint: ModelEndpoint) -> list[tuple[str, str]]:
-    return [(endpoint.model_id, "off")]
+    """Returns [(published_model_id, reasoning_level), ...] for one
+    endpoint. The "off" level (if configured) publishes under the bare
+    `model_id`; every other level gets a "-{level}" suffix."""
+    levels = (endpoint.reasoning_profile or {}).get("levels") or {}
+    if not levels:
+        return [(endpoint.model_id, BASE_LEVEL)]
+
+    published: list[tuple[str, str]] = []
+    for level in levels:
+        model_id = endpoint.model_id if level == BASE_LEVEL else f"{endpoint.model_id}-{level}"
+        published.append((model_id, level))
+    return published
 
 
 def resolve_model(endpoints: list[ModelEndpoint], requested_model: str) -> tuple[ModelEndpoint, str] | None:
-    """Finds which endpoint a client-requested `model` string refers to."""
+    """Finds which endpoint + reasoning level a client-requested `model`
+    string refers to, across every endpoint's own published ids."""
     for endpoint in endpoints:
-        if endpoint.model_id == requested_model:
-            return endpoint, "off"
+        for published_id, level in published_model_ids(endpoint):
+            if published_id == requested_model:
+                return endpoint, level
     return None

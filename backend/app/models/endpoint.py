@@ -7,17 +7,33 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin, new_uuid, utcnow
 
 # Default reasoning_profile shape written by the admin "check endpoint" flow
-# and consumed by app.services.llm.reasoning. See the plan doc for the
-# rationale: the real vLLM behaviour (reasoning_content vs inline tags,
-# native tool-calls vs none) is unknown until probed against the live pod.
+# and consumed by app.services.llm.reasoning. The real vLLM behaviour
+# (reasoning_content vs inline tags, native tool-calls vs none, whether an
+# effort level is honoured) is unknown until probed against the live pod.
 #
-# There is deliberately no per-level `reasoning_effort` request control
-# here anymore: GLM-4.7 (this project's actual target model) was found to
-# emit corrupted/looping output whenever `reasoning_effort` was set to
-# anything at all, regardless of value, on the vLLM build in use. The
-# proxy never requests a reasoning level - `parse` only describes how to
-# read back whatever reasoning a model emits on its own.
+# `levels` drives BOTH what gets sent upstream and which model ids the
+# proxy publishes: one id per level, which is how a tester picks a level
+# from opencode (it has no reasoning-effort concept of its own - it only
+# picks a model). "off" publishes under the bare model_id; the rest get a
+# "-{level}" suffix.
+#
+# The values are vLLM's, not ours: `reasoning_effort` is validated against
+# 'none'/'minimal'/'low'/'medium'/'high'/'xhigh'/'max', and anything else
+# comes back as a 400. Hence "off" -> "none" rather than sending "off".
+#
+# An endpoint whose model misbehaves under reasoning_effort can have its
+# `levels` set to {} - the proxy then publishes only the bare model id and
+# sends no reasoning field at all. That is not hypothetical: GLM-4.7 was
+# found to emit corrupted, looping output whenever reasoning_effort was
+# set to any value whatsoever, and this is the escape hatch for that,
+# per-endpoint and without a code change.
 DEFAULT_REASONING_PROFILE: dict[str, Any] = {
+    "levels": {
+        "off": {"extra_body": {"reasoning_effort": "none"}},
+        "low": {"extra_body": {"reasoning_effort": "low"}},
+        "medium": {"extra_body": {"reasoning_effort": "medium"}},
+        "high": {"extra_body": {"reasoning_effort": "high"}},
+    },
     "parse": {"mode": "auto", "field": "reasoning_content", "tags": ["<think>", "</think>"]},
 }
 

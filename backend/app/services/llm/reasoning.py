@@ -1,25 +1,48 @@
-"""Response-side reasoning parsing.
+"""Reasoning: requesting a level upstream, and parsing what comes back.
 
 The whole point of this module is that the real behaviour of a given vLLM
 deployment (whether it echoes reasoning as a separate `reasoning_content`
 delta field, as inline `<think>...</think>` tags in `content`, or not at
-all) is unknown until probed against the live endpoint. Everything here is
-driven by the endpoint's stored `reasoning_profile`'s `parse` config, not
-hardcoded assumptions, so an admin can correct it from the "check
-endpoint" flow without a code change.
+all; and whether it honours a requested effort level at all) is unknown
+until probed against the live endpoint. Everything here is driven by the
+endpoint's stored `reasoning_profile`, not hardcoded assumptions, so an
+admin can correct it from the "check endpoint" flow without a code change.
 
-Note: this module used to also *request* a reasoning level via a
-`reasoning_effort` field the caller could vary per request - removed
-after GLM-4.7 (this project's actual target model) was found to emit
-corrupted/looping output whenever `reasoning_effort` was set to anything
-at all upstream, regardless of value. This module now only parses
-whatever reasoning a model emits on its own; it never asks for a level.
+Requesting a level was removed from this module once, after GLM-4.7 was
+found to emit corrupted/looping output whenever `reasoning_effort` was set
+to anything at all. It is back for DeepSeek V4, which is a reasoning model
+with real effort levels - but the mechanism stays per-endpoint on purpose:
+an endpoint whose model misbehaves like GLM did just gets an empty
+`levels` map in its profile, which disables the whole thing for that
+endpoint without touching code or affecting any other endpoint.
 """
 
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# Level names as this service uses them - deliberately NOT the literals
+# sent upstream. vLLM validates `reasoning_effort` against
+# 'none'/'minimal'/'low'/'medium'/'high'/'xhigh'/'max' and rejects anything
+# else with a 400, so "off" (which reads better in a model id, and matches
+# opencode's own vocabulary) maps to "none" in the profile rather than
+# being sent verbatim.
+REASONING_LEVELS = ("off", "low", "medium", "high")
+ReasoningLevel = Literal["off", "low", "medium", "high"]
+
 ParseMode = Literal["auto", "field", "tags"]
+
+
+def build_extra_body(reasoning_profile: dict[str, Any], level: str) -> dict[str, Any]:
+    """Extra top-level JSON fields to merge into the upstream chat
+    completion request for the given reasoning level.
+
+    Returns an empty dict for an unknown level, and for every level when
+    the endpoint has no `levels` configured - in both cases the request
+    goes upstream with no reasoning field at all, which is what we want:
+    the model then does whatever it does by default.
+    """
+    level_cfg = (reasoning_profile or {}).get("levels", {}).get(level, {})
+    return dict(level_cfg.get("extra_body", {}))
 
 
 @dataclass

@@ -69,25 +69,41 @@ Add a custom provider to `opencode.json` (project-local or
         "apiKey": "{env:LLMHELL_API_KEY}"
       },
       "models": {
-        "glm-4.7": { "name": "GLM 4.7" },
-        "glm-4.7-flash": { "name": "GLM 4.7 Flash" }
+        "deepseek-v4-flash": { "name": "DeepSeek V4 Flash" },
+        "deepseek-v4-flash-medium": { "name": "DeepSeek V4 Flash (reasoning: medium)" },
+        "deepseek-v4-flash-high": { "name": "DeepSeek V4 Flash (reasoning: high)" }
       }
     }
   },
-  "model": "llmhell/glm-4.7"
+  "model": "llmhell/deepseek-v4-flash"
 }
 ```
 
 `GET /v1/models` reports exactly which model ids are currently valid for
 a given key - it's driven by whatever endpoints `add-endpoint` has
-registered, not a fixed list, so check it if a model id 404s.
+registered and their `reasoning_profile`, not a fixed list, so check it if
+a model id 404s.
 
-There is no way to request a reasoning level/effort from opencode: the
-proxy never sends a `reasoning_effort` field upstream at all, on any
-model. GLM-4.7 (this project's actual target model) was found to emit
-corrupted/looping output whenever that field was set to anything at all,
-regardless of value, so every request just gets whatever reasoning
-behaviour the endpoint does on its own.
+### Reasoning levels
+
+opencode has no reasoning-effort setting - it only picks a model. So each
+endpoint is published under one model id per configured level: the bare
+`model_id` for "off", and `model_id-{level}` for the rest. Picking
+`deepseek-v4-flash-high` in opencode makes the proxy send
+`reasoning_effort: high` upstream and record `reasoning_level=high` on the
+request row, so the Grafana dashboards can break cost and latency down by
+level.
+
+The level attached to the model id wins over any `reasoning_effort` a
+client sends by hand - otherwise two different published ids could behave
+identically and the recorded level would be a lie.
+
+Levels live in the endpoint's `reasoning_profile` JSON, not in code. An
+endpoint whose model misbehaves when asked for an effort level can have
+its `levels` cleared, which collapses it back to a single bare model id
+that sends no reasoning field at all. That is not hypothetical: GLM-4.7
+emitted corrupted, looping output whenever `reasoning_effort` was set to
+any value, and this is the per-endpoint escape hatch for that.
 
 ## Production (RunPod-backed)
 

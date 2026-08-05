@@ -130,13 +130,67 @@ MAX_MODEL_LEN=524288
 # larger blocks cut paging overhead on very long contexts.
 BLOCK_SIZE=256
 
-# No deepseek_v4 parser exists in vLLM yet - these are the newest DeepSeek
-# ones available (deepseek_v31 tool-calling / deepseek_v3 reasoning, both
-# documented against DeepSeek-V3.1) and are unverified against V4's actual
-# output format. If opencode's tool calls come back as plain text instead
-# of structured tool_calls, this pairing is the first thing to suspect:
-# check with `manage.py probe-endpoint`, and try clearing them (vLLM then
-# emits raw text and the proxy's json_protocol fallback takes over).
+# Multi-token prediction (self-speculative decoding). The checkpoint ships
+# the MTP head itself - config.json has num_nextn_predict_layers=1 and
+# mtp_num_hidden_layers=1, and the weight index lists ~4700 mtp.* tensors -
+# so no separate draft model is downloaded or configured: with "model"
+# omitted, vLLM reuses the target checkpoint as its own drafter. The fork
+# maps deepseek_v4 -> deepseek_mtp/DeepSeekV4MTPModel explicitly.
+#
+# "method" must be spelled out. Left unset it defaults to "draft_model",
+# which is not what we want here. num_speculative_tokens=1 matches the
+# single MTP layer this checkpoint provides; more would have to be drafted
+# autoregressively from that one head, which lowers acceptance.
+#
+# NOT the official model card's '{"method":"dspark",...}': "dspark" is not
+# among this fork's accepted methods (ngram, medusa, mlp_speculator,
+# draft_model, suffix, eagle/eagle3/mtp variants, ngram_gpu) and would be
+# rejected at startup.
+#
+# Set to "" to disable speculation entirely. Speculative decoding is a
+# latency win only while draft tokens are accepted - if throughput drops
+# instead of rising, check the acceptance rate in the server log before
+# tuning anything else.
+# DISABLED - tried and does not work with this checkpoint + this vLLM build.
+#
+# The weights are genuinely there (config.json: num_nextn_predict_layers=1,
+# mtp_num_hidden_layers=1; ~4700 mtp.* tensors in the index), but vLLM's V4
+# MTP loader looks for a different naming scheme than the release uses:
+#   KeyError: 'model.layers.43.mtp_block.main_norm.weight'
+# while both deepseek-ai's and unsloth's checkpoints name those tensors
+# mtp.0.hc_attn_base / mtp.0.hc_ffn_base / ... - checked both indexes, and
+# "mtp_block" appears in neither, so this is not an unsloth packaging quirk
+# and switching to the original repo would fail identically. Nothing here
+# can bridge that; it needs a vLLM build whose loader matches the release.
+#
+# Re-test after a vLLM upgrade by restoring:
+#   SPECULATIVE_CONFIG='{"method":"mtp","num_speculative_tokens":1}'
+# (method must be spelled out - unset defaults to "draft_model"; and the
+# official card's "dspark" method does not exist in this fork at all.)
+SPECULATIVE_CONFIG=""
+
+# All three deepseek_v4 values are real and verified against vLLM's source
+# (an earlier comment here claimed no deepseek_v4 parser existed - that was
+# read off documentation that lagged the code):
+#   reasoning-parser deepseek_v4 -> DeepSeekV4ParserReasoningAdapter,
+#     registered in vllm/reasoning/__init__.py
+#   tokenizer-mode   deepseek_v4 -> listed in TokenizerMode alongside auto,
+#     hf, slow, mistral, deepseek_v32
+#
+# What the reasoning parser does: it splits the model's thinking out of
+# `content` into a separate `reasoning_content` field on the response. It
+# cannot be done downstream - this proxy forwards upstream bytes verbatim
+# and only reads a copy for metrics, so if vLLM leaves the thinking inline,
+# it stays inline all the way to the client.
+#
+# Two distinct failure modes if thinking still shows up in the message:
+#   - the flag never reached the server -> check "non-default args" in the
+#     startup log, which echoes what vLLM actually parsed;
+#   - vLLM did split it out, but the client ignores `reasoning_content`
+#     (it is a vLLM/DeepSeek extension, not part of the OpenAI schema, and
+#     opencode's openai-compatible provider need not render it). Tell the
+#     two apart with a raw curl: if the JSON has a populated
+#     reasoning_content, the server side is doing its job.
 TOOL_CALL_PARSER="deepseek_v4"
 REASONING_PARSER="deepseek_v4"
 TOKENIZER_MODE="deepseek_v4"  # vLLM's tokenizer-mode is required for DeepSeek's rope scaling to work correctly
@@ -368,6 +422,7 @@ start_vllm() {
         ${QUANTIZATION:+--quantization "$QUANTIZATION"} \
         --kv-cache-dtype "$KV_CACHE_DTYPE" \
         --block-size "$BLOCK_SIZE" \
+        ${SPECULATIVE_CONFIG:+--speculative-config "$SPECULATIVE_CONFIG"} \
         ${TOOL_CALL_PARSER:+--tool-call-parser "$TOOL_CALL_PARSER"} \
         ${REASONING_PARSER:+--reasoning-parser "$REASONING_PARSER"} \
         ${TOOL_CALL_PARSER:+--enable-auto-tool-choice} \
@@ -435,6 +490,12 @@ _diagnose_known_failures() {
         echo "   -> setuptools-scm couldn't derive a version from this shallow, tagless checkout." >&2
         echo "      ds_setup.sh pins SETUPTOOLS_SCM_PRETEND_VERSION for that; if it persists, delete" >&2
         echo "      $VLLM_SRC_DIR/vllm.egg-info and rerun with FORCE_REBUILD_VLLM=\"true\"." >&2
+    fi
+    if grep -qiE "KeyError: 'model\.layers\.[0-9]+\.mtp_block|mtp_block\." "$logfile"; then
+        echo "   -> speculative MTP is on, but this vLLM build's MTP loader expects tensor names" >&2
+        echo "      (model.layers.N.mtp_block.*) that the released checkpoint doesn't use (mtp.0.hc_*)." >&2
+        echo "      Not fixable by config, and not specific to the unsloth copy - the deepseek-ai" >&2
+        echo "      checkpoint names them identically. Set SPECULATIVE_CONFIG=\"\" in ds_common.sh." >&2
     fi
     if grep -qiE "Unknown SF transformation|Unsupported architecture|deepgemm-src" "$logfile"; then
         echo "   -> DeepGEMM was built without SM120 (RTX PRO 6000) support. The revision matters:" >&2
