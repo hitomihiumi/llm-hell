@@ -23,6 +23,7 @@ from app.core.db import SessionLocal
 from app.models.api_key import ApiKey
 from app.models.endpoint import DEFAULT_REASONING_PROFILE, ModelEndpoint
 from app.models.user import User
+from app.services.llm.model_routing import published_model_ids
 from app.services.llm.probe import check_endpoint
 
 
@@ -143,8 +144,28 @@ async def cmd_update_endpoint(args: argparse.Namespace) -> None:
         if args.disable:
             endpoint.enabled = False
 
+        if args.reset_reasoning_profile:
+            # reasoning_profile is only written at creation time, so an
+            # endpoint registered before a change to DEFAULT_REASONING_PROFILE
+            # keeps the old shape forever - which shows up as
+            # "unknown model: '<model>-high'" when the new levels aren't in
+            # its stored profile. This re-stamps it from the current default.
+            endpoint.reasoning_profile = dict(DEFAULT_REASONING_PROFILE)
+            print("reset reasoning_profile to the current default")
+        if args.disable_reasoning_levels:
+            # Keep `parse` (how to read reasoning back) but drop `levels`
+            # (asking for it), collapsing this endpoint to a single bare
+            # model id that sends no reasoning_effort at all.
+            profile = dict(endpoint.reasoning_profile or {})
+            profile["levels"] = {}
+            endpoint.reasoning_profile = profile
+            print("cleared reasoning levels - this endpoint now publishes only its bare model id")
+
         await db.commit()
         print(f"updated endpoint {endpoint.name!r} (id={endpoint.id})")
+        if args.reset_reasoning_profile or args.disable_reasoning_levels:
+            published = ", ".join(mid for mid, _ in published_model_ids(endpoint))
+            print(f"now publishing: {published}")
 
 
 async def cmd_list_endpoints(args: argparse.Namespace) -> None:
@@ -239,6 +260,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tools-mode", choices=["native", "json_protocol"], default=None)
     p.add_argument("--enable", action="store_true")
     p.add_argument("--disable", action="store_true")
+    p.add_argument(
+        "--reset-reasoning-profile",
+        action="store_true",
+        help="Re-stamp reasoning_profile from the current default. Needed for endpoints "
+        "registered before the reasoning levels existed, which otherwise 404 on "
+        "'<model>-high' and friends.",
+    )
+    p.add_argument(
+        "--disable-reasoning-levels",
+        action="store_true",
+        help="Clear this endpoint's reasoning levels so it publishes only its bare model id "
+        "and never sends reasoning_effort (for models that misbehave when asked for one).",
+    )
     p.set_defaults(func=cmd_update_endpoint)
 
     p = subparsers.add_parser("list-endpoints", help="List all configured model endpoints")

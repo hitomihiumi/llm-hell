@@ -163,6 +163,8 @@ async def test_update_endpoint_applies_only_given_fields(_use_test_db) -> None:
             tools_mode=None,
             enable=False,
             disable=True,
+            reset_reasoning_profile=False,
+            disable_reasoning_levels=False,
         )
     )
 
@@ -171,6 +173,88 @@ async def test_update_endpoint_applies_only_given_fields(_use_test_db) -> None:
         assert endpoint.name == "renamed"
         assert endpoint.base_url == "https://a.example/v1"  # untouched
         assert endpoint.enabled is False
+
+
+def _update_args(endpoint_id: str, **overrides):
+    base = dict(
+        endpoint_id=endpoint_id,
+        name=None,
+        base_url=None,
+        model_id=None,
+        role=None,
+        api_key=None,
+        ctx_window=None,
+        price_in=None,
+        price_out=None,
+        tools_mode=None,
+        enable=False,
+        disable=False,
+        reset_reasoning_profile=False,
+        disable_reasoning_levels=False,
+    )
+    base.update(overrides)
+    return Namespace(**base)
+
+
+@pytest.mark.asyncio
+async def test_reset_reasoning_profile_restores_level_model_ids(_use_test_db, capsys) -> None:
+    """An endpoint registered before reasoning levels existed keeps its old
+    profile forever, which surfaces to users as
+    "unknown model: '<model>-high'". This is the fix for that."""
+    async with _use_test_db() as db:
+        endpoint = ModelEndpoint(
+            name="legacy",
+            base_url="https://a.example/v1",
+            model_id="deepseek-v4-flash",
+            role="executor",
+            ctx_window=32768,
+            reasoning_profile={"parse": {"mode": "auto"}},  # no levels
+        )
+        db.add(endpoint)
+        await db.commit()
+        await db.refresh(endpoint)
+        endpoint_id = endpoint.id
+
+    assert manage.published_model_ids(endpoint) == [("deepseek-v4-flash", "off")]
+
+    await manage.cmd_update_endpoint(_update_args(endpoint_id, reset_reasoning_profile=True))
+    output = capsys.readouterr().out
+    assert "deepseek-v4-flash-high" in output
+
+    async with _use_test_db() as db:
+        endpoint = await db.get(ModelEndpoint, endpoint_id)
+        ids = {mid for mid, _ in manage.published_model_ids(endpoint)}
+        assert ids == {
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-low",
+            "deepseek-v4-flash-medium",
+            "deepseek-v4-flash-high",
+        }
+
+
+@pytest.mark.asyncio
+async def test_disable_reasoning_levels_collapses_to_bare_id(_use_test_db) -> None:
+    async with _use_test_db() as db:
+        endpoint = ModelEndpoint(
+            name="misbehaving",
+            base_url="https://a.example/v1",
+            model_id="glm-4.7",
+            role="executor",
+            ctx_window=32768,
+        )
+        db.add(endpoint)
+        await db.commit()
+        await db.refresh(endpoint)
+        endpoint_id = endpoint.id
+
+    await manage.cmd_update_endpoint(_update_args(endpoint_id, disable_reasoning_levels=True))
+
+    async with _use_test_db() as db:
+        endpoint = await db.get(ModelEndpoint, endpoint_id)
+        assert manage.published_model_ids(endpoint) == [("glm-4.7", "off")]
+        # `parse` must survive - we still need to read reasoning back even
+        # when we stop asking for it.
+        assert endpoint.reasoning_profile["parse"]["field"] == "reasoning_content"
 
 
 @pytest.mark.asyncio
@@ -190,6 +274,8 @@ async def test_update_unknown_endpoint_fails(_use_test_db) -> None:
                 tools_mode=None,
                 enable=False,
                 disable=False,
+                reset_reasoning_profile=False,
+                disable_reasoning_levels=False,
             )
         )
 
