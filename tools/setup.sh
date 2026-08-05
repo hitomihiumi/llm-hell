@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds vLLM from source (main branch, where DeepseekV4ForCausalLM support
 # lives), targeting CUDA 13 + Blackwell (SM 12.x/sm_120) explicitly via
-# TORCH_CUDA_ARCH_LIST, then downloads the DeepSeek V4 Flash checkpoint
-# (~167GB, natively FP8) and launches it as a vLLM OpenAI-compatible server.
+# TORCH_CUDA_ARCH_LIST, then downloads the checkpoint named by the active
+# config (CONFIG_FILE, default ds_common.sh) and launches it as a vLLM
+# OpenAI-compatible server.
 #
 # Assumes the pod image already has Python and CUDA 13 (x86_64) installed
 # - everything else (build tooling, torch, vLLM itself, HF download
@@ -37,8 +38,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Which model to serve. Defaults to the DeepSeek config so existing
+# invocations keep working; override to run a different model, e.g.
+#   CONFIG_FILE=qwen_common.sh bash setup.sh
+CONFIG_FILE="${CONFIG_FILE:-ds_common.sh}"
+echo "==> Using config: $CONFIG_FILE"
 # shellcheck source=./ds_common.sh
-source "$SCRIPT_DIR/ds_common.sh"
+source "$SCRIPT_DIR/$CONFIG_FILE"
 
 mkdir -p "$LOG_DIR" "$VLLM_WHEEL_DIR"
 
@@ -311,7 +317,7 @@ export HF_HUB_ENABLE_HF_TRANSFER=1
 # huggingface_hub/issues/3266) - actually uninstalling the package is the
 # only fix confirmed to work, forcing a fall back to plain HTTP/hf_transfer.
 uv pip uninstall --system hf_xet 2>/dev/null || true
-export HF_HUB_DISABLE_XET=1
+export HF_HUB_DISABLE_XET=0
 
 # One-time migration: earlier runs before HF_HOME pointed at /workspace may
 # have left partial/complete downloads under the default root-disk cache -
@@ -324,13 +330,15 @@ if [ -d "$stale_dir" ]; then
     rm -rf "$stale_dir"
 fi
 
-# ~167GB, and /workspace on RunPod is a network volume whose usable quota
-# can be well below the size shown in the dashboard - check before spending
-# an hour downloading into a wall.
+# Checkpoints here run 167-230 GiB, and /workspace on RunPod is a network
+# volume whose usable quota can be well below the size shown in the
+# dashboard - check before spending an hour downloading into a wall. The
+# size isn't hardcoded: it used to say "~167GB" for every model, which was
+# simply wrong once a second, larger one was added.
 echo "==> Free space on \$HF_HOME's volume before download:"
 df -h "$HF_HOME"
 
-echo "==> Downloading $MODEL_REPO (~167GB)"
+echo "==> Downloading $MODEL_REPO"
 hf download "$MODEL_REPO" 2>&1 | tee "$LOG_DIR/download.log"
 
 start_vllm

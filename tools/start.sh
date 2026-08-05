@@ -21,7 +21,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./common.sh
-source "$SCRIPT_DIR/ds_common.sh"
+# Which model to serve. Defaults to the DeepSeek config so existing
+# invocations keep working; override to run a different model, e.g.
+#   CONFIG_FILE=qwen_common.sh bash setup.sh
+CONFIG_FILE="${CONFIG_FILE:-ds_common.sh}"
+echo "==> Using config: $CONFIG_FILE"
+# shellcheck source=./ds_common.sh
+source "$SCRIPT_DIR/$CONFIG_FILE"
 
 mkdir -p "$LOG_DIR"
 
