@@ -215,21 +215,18 @@ async def test_reset_reasoning_profile_restores_level_model_ids(_use_test_db, ca
         await db.refresh(endpoint)
         endpoint_id = endpoint.id
 
-    assert manage.published_model_ids(endpoint) == [("deepseek-v4-flash", "off")]
+    assert manage.published_model_ids(endpoint) == [("deepseek-v4-flash", "default")]
 
     await manage.cmd_update_endpoint(_update_args(endpoint_id, reset_reasoning_profile=True))
-    output = capsys.readouterr().out
-    assert "deepseek-v4-flash-high" in output
+    capsys.readouterr()
 
     async with _use_test_db() as db:
         endpoint = await db.get(ModelEndpoint, endpoint_id)
-        ids = {mid for mid, _ in manage.published_model_ids(endpoint)}
-        assert ids == {
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-low",
-            "deepseek-v4-flash-medium",
-            "deepseek-v4-flash-high",
-        }
+        # The published id is unchanged either way now; what the reset
+        # restores is `levels`, which decides whether reasoning_effort is
+        # forwarded or stripped.
+        assert manage.published_model_ids(endpoint) == [("deepseek-v4-flash", "default")]
+        assert endpoint.reasoning_profile["levels"]
 
 
 @pytest.mark.asyncio
@@ -251,7 +248,7 @@ async def test_disable_reasoning_levels_collapses_to_bare_id(_use_test_db) -> No
 
     async with _use_test_db() as db:
         endpoint = await db.get(ModelEndpoint, endpoint_id)
-        assert manage.published_model_ids(endpoint) == [("glm-4.7", "off")]
+        assert manage.published_model_ids(endpoint) == [("glm-4.7", "default")]
         # `parse` must survive - we still need to read reasoning back even
         # when we stop asking for it.
         assert endpoint.reasoning_profile["parse"]["field"] == "reasoning_content"
@@ -347,13 +344,10 @@ async def test_opencode_config_emits_limits_from_endpoints(_use_test_db, capsys)
     config = json.loads(capsys.readouterr().out)
 
     models = config["provider"]["llmhell"]["models"]
-    # One id per reasoning level, each carrying the endpoint's real window.
-    assert set(models) == {
-        "deepseek-v4-flash",
-        "deepseek-v4-flash-low",
-        "deepseek-v4-flash-medium",
-        "deepseek-v4-flash-high",
-    }
+    # One entry per endpoint - the level is picked with opencode's own
+    # effort selector, not by choosing a different model id.
+    assert set(models) == {"deepseek-v4-flash"}
+    assert models["deepseek-v4-flash"]["interleaved"] == {"field": "reasoning"}
     for model in models.values():
         assert model["limit"]["context"] == 524288
         # output is carved out of the context window, not added to it.

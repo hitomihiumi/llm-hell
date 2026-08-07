@@ -26,8 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api_keys import CurrentKeyUser
 from app.core.db import get_db
 from app.models.endpoint import ModelEndpoint
-from app.services.llm.model_routing import published_model_ids, resolve_model
-from app.services.llm.reasoning import ReasoningStreamParser, build_extra_body
+from app.services.llm.model_routing import DEFAULT_LEVEL, published_model_ids, resolve_model
+from app.services.llm.reasoning import ReasoningStreamParser
 from app.services.stats.recorder import RequestOutcome, extract_session_ids, record_request
 
 router = APIRouter(tags=["proxy"])
@@ -65,18 +65,37 @@ async def list_models(_: CurrentKeyUser, db: AsyncSession = Depends(get_db)) -> 
     return {"object": "list", "data": data}
 
 
-def _build_upstream_request_body(
-    body: dict[str, Any], endpoint: ModelEndpoint, reasoning_level: str
-) -> dict[str, Any]:
+def resolve_reasoning_level(body: dict[str, Any]) -> str:
+    """The level this request asked for, for recording purposes.
+
+    opencode has its own effort selector (Default/Low/Medium/High/Max) and
+    puts the choice in `reasoning_effort`. Reading it here - rather than
+    deriving it from the model id, as this used to - is what lets that
+    selector actually control anything.
+    """
+    effort = body.get("reasoning_effort")
+    if not isinstance(effort, str) or not effort:
+        return DEFAULT_LEVEL
+    # The column is String(16); vLLM's own vocabulary fits, but a client is
+    # free to send anything and a long value would fail the insert.
+    return effort[:16]
+
+
+def _build_upstream_request_body(body: dict[str, Any], endpoint: ModelEndpoint) -> dict[str, Any]:
     upstream_body = dict(body)
-    # The client asked for e.g. "deepseek-v4-flash-high"; upstream only
-    # knows the bare model, with the level expressed as a request field.
     upstream_body["model"] = endpoint.model_id
-    # Applied after the client's own fields, deliberately: the level is
-    # part of which model id was selected, so it wins over any
-    # reasoning_effort a client set by hand, which would otherwise make
-    # two different published model ids behave identically.
-    upstream_body.update(build_extra_body(endpoint.reasoning_profile, reasoning_level))
+
+    # `reasoning_effort` is passed THROUGH untouched. It used to be
+    # overwritten from the model id's suffix, which silently defeated
+    # opencode's effort selector: whatever the user picked was replaced.
+    #
+    # The one exception is an endpoint whose profile has no `levels` at all.
+    # That is the escape hatch for a model that misbehaves when asked for an
+    # effort level - GLM-4.7 emitted looping garbage for any value - so for
+    # those the field is stripped rather than forwarded.
+    levels = (endpoint.reasoning_profile or {}).get("levels")
+    if not levels:
+        upstream_body.pop("reasoning_effort", None)
 
     if upstream_body.get("stream"):
         stream_options = dict(upstream_body.get("stream_options") or {})
@@ -163,7 +182,11 @@ def _parse_full_response_metrics(body: bytes, outcome: RequestOutcome) -> None:
     if not choices:
         return
     message = choices[0].get("message") or {}
-    outcome.reasoning_text = message.get("reasoning_content") or ""
+    # Both names, because which one a server uses is version-dependent:
+    # vLLM 0.26.0 emits "reasoning", older builds emit "reasoning_content".
+    # Reading only one silently reports zero reasoning tokens against the
+    # other.
+    outcome.reasoning_text = message.get("reasoning") or message.get("reasoning_content") or ""
     outcome.finish_reason = choices[0].get("finish_reason")
     outcome.tool_call_count = len(message.get("tool_calls") or [])
     if outcome.reasoning_text or (message.get("content") or ""):
@@ -200,7 +223,7 @@ async def chat_completions(
             api_key=api_key,
             endpoint=None,
             requested_model=requested_model or "",
-            reasoning_level="off",
+            reasoning_level=resolve_reasoning_level(body),
             stream=stream,
             session_id=session_id,
             parent_session_id=parent_session_id,
@@ -216,8 +239,11 @@ async def chat_completions(
     if resolved is None:
         return await _fail(400, "unknown_model", f"unknown model: {requested_model!r}")
 
-    endpoint, reasoning_level = resolved
-    upstream_body = _build_upstream_request_body(body, endpoint, reasoning_level)
+    endpoint, _ = resolved
+    # From the request, not the model id: opencode's effort selector is
+    # what sets this now.
+    reasoning_level = resolve_reasoning_level(body)
+    upstream_body = _build_upstream_request_body(body, endpoint)
     upstream_url = endpoint.base_url.rstrip("/") + "/chat/completions"
 
     async def _record(final: RequestOutcome) -> None:

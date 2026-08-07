@@ -196,17 +196,31 @@ async def cmd_opencode_config(args: argparse.Namespace) -> None:
 
     models: dict[str, Any] = {}
     for endpoint in endpoints:
-        for model_id, level in published_model_ids(endpoint):
-            label = endpoint.name if level == "off" else f"{endpoint.name} (reasoning: {level})"
+        # One entry per endpoint. There used to be one per reasoning level,
+        # with "-low"/"-medium"/"-high" suffixes, until it turned out
+        # opencode has its own effort selector that sends reasoning_effort -
+        # so those extra ids duplicated a control the client already had.
+        for model_id, _level in published_model_ids(endpoint):
             models[model_id] = {
-                "name": label,
+                "name": endpoint.name,
                 # Without these two, thinking shows up as ordinary assistant
                 # text in the transcript. `reasoning` marks the model as
                 # capable; `interleaved` names the field the reasoning
-                # actually arrives in - vLLM and DeepSeek use
-                # `reasoning_content`, and opencode does not assume it.
+                # actually arrives in, which opencode does not guess.
+                #
+                # The field is "reasoning" - checked against a real vLLM
+                # 0.26.0 response, where the assistant message carries
+                # "reasoning": null alongside "content". NOT
+                # "reasoning_content": that name appears in older vLLM and in
+                # opencode's own enum, but this server does not emit it, and
+                # pointing at a field the server never sends leaves the
+                # thinking rendered as ordinary text.
+                #
+                # The OBJECT form is deliberate too. opencode's published
+                # schema also allows a bare string, but shipped builds reject
+                # it with "Expected true | object | undefined".
                 "reasoning": True,
-                "interleaved": "reasoning_content",
+                "interleaved": {"field": "reasoning"},
                 "limit": {
                     # Both are required by opencode's schema. `context` is the
                     # server's --max-model-len; `output` is carved out of it,

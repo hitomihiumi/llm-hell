@@ -77,7 +77,16 @@ class ReasoningStreamParser:
 
     def feed(self, delta: dict[str, Any]) -> ParsedDelta:
         content_piece = delta.get("content") or ""
-        reasoning_field_piece = delta.get(self._field) or ""
+        # The configured field first, then the other conventional names:
+        # vLLM 0.26.0 streams reasoning in "reasoning", older builds in
+        # "reasoning_content", and a profile written against one server
+        # would otherwise count zero reasoning tokens on the other.
+        reasoning_field_piece = ""
+        for candidate in (self._field, "reasoning", "reasoning_content", "reasoning_text"):
+            piece = delta.get(candidate)
+            if piece:
+                reasoning_field_piece = piece
+                break
 
         if self._mode == "undetermined":
             if reasoning_field_piece:

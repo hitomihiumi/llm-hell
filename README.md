@@ -72,19 +72,7 @@ Add a custom provider to `opencode.json` (project-local or
         "deepseek-v4-flash": {
           "name": "DeepSeek V4 Flash",
           "reasoning": true,
-          "interleaved": "reasoning_content",
-          "limit": { "context": 343296, "output": 32768 }
-        },
-        "deepseek-v4-flash-medium": {
-          "name": "DeepSeek V4 Flash (reasoning: medium)",
-          "reasoning": true,
-          "interleaved": "reasoning_content",
-          "limit": { "context": 343296, "output": 32768 }
-        },
-        "deepseek-v4-flash-high": {
-          "name": "DeepSeek V4 Flash (reasoning: high)",
-          "reasoning": true,
-          "interleaved": "reasoning_content",
+          "interleaved": { "field": "reasoning" },
           "limit": { "context": 343296, "output": 32768 }
         }
       }
@@ -96,10 +84,25 @@ Add a custom provider to `opencode.json` (project-local or
 ```
 
 `reasoning` and `interleaved` are what keep the model's thinking out of the
-normal transcript. vLLM emits it in a separate `reasoning_content` field
-(that is what `--reasoning-parser` produces), but opencode does not assume
-that name - without `interleaved` pointing at it, the thinking is rendered
-as ordinary assistant text, interleaved with tool calls.
+normal transcript. `--reasoning-parser` makes vLLM split it into its own
+field, but opencode does not guess which one - without `interleaved`
+pointing at it, the thinking is rendered as ordinary assistant text,
+interleaved with tool calls.
+
+The field name is **`reasoning`**, confirmed against a real vLLM 0.26.0
+response (the assistant message carries `"reasoning": null` next to
+`"content"`). Older vLLM used `reasoning_content`, and opencode's enum
+still lists it, but pointing at a field this server never sends has exactly
+the same effect as not setting `interleaved` at all. Check yours before
+trusting either name:
+
+```bash
+curl -s http://<pod>:8000/v1/chat/completions -H 'Content-Type: application/json'   -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}'   | python3 -m json.tool | grep -i reason
+```
+
+Use the object form, `{ "field": "reasoning" }`. opencode's published
+schema also accepts a bare string there, but shipped builds reject it with
+`Expected true | object | undefined` - the object works on both.
 
 `limit` is not optional: opencode's schema requires `context` and `output`,
 and without them there is no context-fill indicator and nothing for
@@ -112,8 +115,7 @@ whole block with the limits filled in from the registered endpoints.
 
 `GET /v1/models` reports exactly which model ids are currently valid for
 a given key - it's driven by whatever endpoints `add-endpoint` has
-registered and their `reasoning_profile`, not a fixed list, so check it if
-a model id 404s.
+registered, not a fixed list, so check it if a model id 404s.
 
 ### Context usage and auto-compaction
 
@@ -131,8 +133,8 @@ that are actually registered:
 docker compose exec api python manage.py opencode-config --base-url http://<host>:8000/v1
 ```
 
-That emits every published model id (one per reasoning level) with its
-`limit.context` taken from the endpoint's `ctx_window`, plus:
+That emits one entry per registered endpoint, with `limit.context` taken
+from its `ctx_window`, plus:
 
 ```json
 "compaction": { "auto": true, "prune": true, "reserved": 8192 }
@@ -157,24 +159,29 @@ docker compose exec api python manage.py update-endpoint <endpoint_id> --ctx-win
 
 ### Reasoning levels
 
-opencode has no reasoning-effort setting - it only picks a model. So each
-endpoint is published under one model id per configured level: the bare
-`model_id` for "off", and `model_id-{level}` for the rest. Picking
-`deepseek-v4-flash-high` in opencode makes the proxy send
-`reasoning_effort: high` upstream and record `reasoning_level=high` on the
-request row, so the Grafana dashboards can break cost and latency down by
-level.
+Pick the level with **opencode's own effort selector** (Default / Low /
+Medium / High / Max), next to the model name in the composer. It sends
+`reasoning_effort` on the request and the proxy forwards it untouched.
 
-The level attached to the model id wins over any `reasoning_effort` a
-client sends by hand - otherwise two different published ids could behave
-identically and the recorded level would be a lie.
+There is deliberately no `-low`/`-medium`/`-high` model id. This service
+used to publish one per level, because opencode was thought to have no
+notion of effort - it does, and the two mechanisms fought: the proxy
+overwrote whatever the selector had chosen with the level implied by the
+model id, so the selector appeared to do nothing.
 
-Levels live in the endpoint's `reasoning_profile` JSON, not in code. An
-endpoint whose model misbehaves when asked for an effort level can have
-its `levels` cleared, which collapses it back to a single bare model id
-that sends no reasoning field at all. That is not hypothetical: GLM-4.7
-emitted corrupted, looping output whenever `reasoning_effort` was set to
-any value, and this is the per-endpoint escape hatch for that.
+The level is recorded on each request row from what the client actually
+sent (`default` when nothing was), so the Grafana dashboards still break
+cost and latency down by level.
+
+One escape hatch survives, for a model that misbehaves when asked for an
+effort level at all - GLM-4.7 emitted looping garbage for every value.
+Clearing that endpoint's `levels` makes the proxy strip `reasoning_effort`
+before forwarding, so the selector becomes a no-op for it instead of
+breaking generation:
+
+```bash
+docker compose exec api python manage.py update-endpoint <endpoint_id> --disable-reasoning-levels
+```
 
 ## Production (RunPod-backed)
 
