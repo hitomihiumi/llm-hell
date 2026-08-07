@@ -33,8 +33,19 @@ runpod_kill_gpu_holders() {
     fi
     # Belt-and-suspenders for anything nvidia-smi didn't catch (e.g. a
     # process mid-startup, not yet holding a CUDA context).
-    pkill -9 -f "vllm serve" 2>/dev/null || true
-    pkill -9 -f "VLLM::" 2>/dev/null || true
+    # These names matter and are easy to get wrong. vLLM renames its children
+    # via setproctitle, and the set of names depends on the topology:
+    #   TP: VLLM::EngineCore, VLLM::Worker
+    #   DP: EngineCore_DP0.., ApiServer_0.., DPCoordinator
+    # The patterns below started as TP-only, which left a data-parallel run's
+    # coordinator and API servers alive. They hold the ZMQ addresses the next
+    # run needs, and the next run then dies with
+    #   RuntimeError: DP Coordinator process failed to report ZMQ addresses
+    #   within timeout=120 seconds during startup
+    # - an error that says nothing about stale processes being the cause.
+    for pat in "vllm serve" "VLLM::" "EngineCore" "ApiServer" "DPCoordinator"; do
+        pkill -9 -f "$pat" 2>/dev/null || true
+    done
     if [ -f "$LOG_DIR/$SERVER_NAME.pid" ]; then
         kill -9 "$(cat "$LOG_DIR/$SERVER_NAME.pid")" 2>/dev/null || true
         rm -f "$LOG_DIR/$SERVER_NAME.pid"
@@ -54,80 +65,90 @@ runpod_kill_gpu_holders() {
         echo "!! Starting the server now would likely OOM - investigate before continuing." >&2
         exit 1
     fi
+
+    # A leftover listener on $PORT is a different failure from a leftover GPU
+    # context and is not caught by the checks above: the old process may have
+    # released its CUDA memory while still holding the socket. Report it by
+    # name rather than letting the new server fail later with EADDRINUSE, or
+    # worse, letting a half-dead predecessor answer health checks.
+    if command -v ss >/dev/null 2>&1; then
+        local port_holder
+        port_holder="$(ss -ltnp 2>/dev/null | grep -E "[:.]${PORT}[[:space:]]" || true)"
+        if [ -n "$port_holder" ]; then
+            echo "!! Port $PORT is still in use after cleanup:" >&2
+            echo "   $port_holder" >&2
+            echo "!! Kill that process (or change PORT) before starting." >&2
+            exit 1
+        fi
+    fi
 }
 
-runpod_clean_corrupt_dist_info() {
-    # A *.dist-info directory missing METADATA reports its version as None.
-    # `python -m build` walks installed distributions while checking build
-    # dependencies and feeds that None straight into packaging's Version(),
-    # which dies with:
-    #   TypeError: 'NoneType' object is not iterable
-    # - a failure that names neither the package nor the file responsible,
-    # and looks like it's about the package being built rather than an
-    # unrelated leftover. uv's recurring "Failed to uninstall package at
-    # ... due to missing `RECORD` file" warnings are the same corruption
-    # showing up earlier and being tolerated.
-    #
-    # These are remnants of interrupted installs. Deleting them is safe:
-    # a dist-info carries only metadata, and one this damaged already fails
-    # to describe whatever it once owned.
-    echo "==> Checking for corrupt dist-info directories"
-    local site_dir di found=0
-    for site_dir in /usr/local/lib/python3.12/dist-packages /usr/lib/python3/dist-packages; do
-        [ -d "$site_dir" ] || continue
-        for di in "$site_dir"/*.dist-info; do
-            [ -d "$di" ] || continue
-            if [ ! -f "$di/METADATA" ]; then
-                echo "   removing (no METADATA): $di"
-                rm -rf "$di"
-                found=$((found + 1))
-            fi
-        done
-    done
-    [ "$found" -eq 0 ] && echo "   none found"
+runpod_raise_fd_limit() {
+    # Data-parallel needs far more file descriptors than the 1024 some pod
+    # images ship with: one coordinator, DP API servers, DP engine cores, and
+    # several ZMQ sockets per rank, on top of CUDA and the open checkpoint
+    # shards. When it runs out, the coordinator dies while creating its
+    # sockets - before it can report anything - and the parent reports only
+    #   RuntimeError: DP Coordinator process failed to report ZMQ addresses
+    #   within timeout=120 seconds during startup
+    # which says nothing about descriptors. DP=1 stays under the limit, which
+    # is why single-GPU runs got further.
+    local want="${FD_LIMIT:-65536}" soft hard
+    soft="$(ulimit -Sn)"
+    [ "$soft" = "unlimited" ] && return 0
+    [ "$soft" -ge "$want" ] && return 0
+
+    hard="$(ulimit -Hn)"
+    local target="$want"
+    if [ "$hard" != "unlimited" ] && [ "$hard" -lt "$target" ]; then
+        target="$hard"
+    fi
+
+    ulimit -Sn "$target" 2>/dev/null || true
+    local now
+    now="$(ulimit -Sn)"
+
+    if [ "$now" -gt "$soft" ]; then
+        echo "==> Raised open-file limit: $soft -> $now"
+    fi
+    # Report the shortfall separately from whether anything was raised: a
+    # hard limit at or below the soft one means the ceiling is set outside
+    # this container and no amount of ulimit here will move it. Saying
+    # "raised 1024 -> 1024" would hide exactly the condition that breaks DP.
+    if [ "$now" -lt "$want" ]; then
+        echo "!! Open-file limit is $now, below the $want data-parallel wants (hard limit: $hard)." >&2
+        echo "!! DP startup can fail with a DP Coordinator ZMQ timeout at this ceiling." >&2
+        echo "!! Raise it outside the container (docker --ulimit nofile=65536, or the pod template)," >&2
+        echo "!! or run with DP_SIZE=1." >&2
+    fi
     return 0
 }
 
 runpod_check_gpu_topology() {
-    # tensor-parallel-size x pipeline-parallel-size must equal the number of
-    # GPUs handed to the server, or vLLM either errors immediately (TP too
-    # high for CUDA_VISIBLE_DEVICES) or silently leaves GPUs idle (TP*PP too
-    # low) - catch a mismatch here, in seconds, rather than after a long
-    # wait for the wrong outcome.
-    echo "==> Checking GPU topology (TP x PP vs GPU count)"
+    # tensor x pipeline x data parallel must equal the number of GPUs handed
+    # to the server, or vLLM either errors immediately (the product exceeds
+    # CUDA_VISIBLE_DEVICES) or silently leaves GPUs idle (product too low) -
+    # catch a mismatch here, in seconds, rather than after a long wait for
+    # the wrong outcome.
+    #
+    # DP is in the product because a data-parallel replica occupies its own
+    # GPU(s): DP=4 with TP=1 fills four GPUs just as TP=4 with DP=1 does.
+    # Defaulting DP to 1 keeps configs that never mention it working.
+    local dp="${DP_SIZE:-1}"
+    echo "==> Checking GPU topology (TP x PP x DP vs GPU count)"
     local gpu_count
     gpu_count="$(echo "$GPUS" | tr ',' '\n' | grep -c .)"
-    if [ "$((TP_SIZE * PP_SIZE))" -ne "$gpu_count" ]; then
-        echo "!! TP=$TP_SIZE x PP=$PP_SIZE = $((TP_SIZE * PP_SIZE)), but GPUS (\"$GPUS\") lists $gpu_count GPU(s)." >&2
-        echo "!! Fix the CONFIG block above - tensor-parallel-size x pipeline-parallel-size must equal the GPU count." >&2
+    if [ "$((TP_SIZE * PP_SIZE * dp))" -ne "$gpu_count" ]; then
+        echo "!! TP=$TP_SIZE x PP=$PP_SIZE x DP=$dp = $((TP_SIZE * PP_SIZE * dp)), but GPUS (\"$GPUS\") lists $gpu_count GPU(s)." >&2
+        echo "!! Fix the CONFIG block above - the product must equal the GPU count." >&2
         exit 1
     fi
 }
 
 start_vllm() {
+    runpod_raise_fd_limit
     echo "==> Starting $SERVER_NAME ($MODEL_REPO) on GPUs [$GPUS], port $PORT, max-model-len $MAX_MODEL_LEN"
     
-    # Exported in an if-block rather than as `VAR="${WORKAROUND:+0}"` prefix
-    # assignments like the NCCL ones below: vLLM reads these two through
-    # int(os.getenv(...)), so handing it an empty string (what :+ expands to
-    # when the workaround is off) raises ValueError instead of meaning
-    # "unset". They must be either "0" or genuinely absent.
-    if [ -n "${DISABLE_DEEP_GEMM_WORKAROUND:-}" ]; then
-        echo "    (DeepGEMM disabled - SM120 workaround, see vllm#47436)"
-        export VLLM_USE_DEEP_GEMM=0
-        export VLLM_MOE_USE_DEEP_GEMM=0
-    fi
-
-    # Same export-in-an-if reasoning as above: these are parsed as int/bool
-    # from the environment, so an empty string is not a safe "unset".
-    [ -n "${TRITON_MLA_SPARSE:-}" ] && export VLLM_TRITON_MLA_SPARSE="${TRITON_MLA_SPARSE:-}"
-    [ -n "${TRITON_MLA_SPARSE_TOPK_CHUNK_SIZE:-}" ] && export VLLM_TRITON_MLA_SPARSE_TOPK_CHUNK_SIZE="${TRITON_MLA_SPARSE_TOPK_CHUNK_SIZE:-}"
-    [ -n "${TRITON_MLA_SPARSE_QUERY_CHUNK_SIZE:-}" ] && export VLLM_TRITON_MLA_SPARSE_QUERY_CHUNK_SIZE="${TRITON_MLA_SPARSE_QUERY_CHUNK_SIZE:-}"
-    [ -n "${TRITON_MLA_SPARSE_ALLOW_CUDAGRAPH:-}" ] && export VLLM_TRITON_MLA_SPARSE_ALLOW_CUDAGRAPH="${TRITON_MLA_SPARSE_ALLOW_CUDAGRAPH:-}"
-    if [ -n "${TRITON_MLA_SPARSE:-}" ]; then
-        echo "    (Triton sparse-MLA enabled - requires the SM120 fork, no-op on upstream vLLM)"
-    fi
-
     # Free-form "NAME=VALUE NAME=VALUE" from the config, exported one at a
     # time. Deliberately not passed as a prefix assignment: those must be
     # literal text in the source to be recognised as assignments at all,
@@ -139,24 +160,41 @@ start_vllm() {
         done
     fi
 
-    # A prefix env-assignment like `NAME=value cmd` is only recognized by
-    # bash when "NAME=" is literal text in the source - substituting the
-    # whole "NAME=value" via `${VAR:+NAME=value}` does NOT work (bash parses
-    # assignment-word shape before expansion, not after), and produces a
-    # bare word bash then tries to run as a command, e.g.
-    # "line N: NCCL_P2P_DISABLE=1: command not found". Keeping "NAME="
-    # literal and only substituting the value (empty string when the
-    # workaround var is unset, which NCCL/vLLM both treat the same as "not
-    # set") sidesteps that entirely.
+    # Exported only when they actually have a value. They used to be passed
+    # unconditionally as prefix assignments, which meant a disabled option
+    # was handed over as an EMPTY STRING rather than being absent - and an
+    # empty string is not "unset": os.getenv() returns "" instead of None,
+    # so code that asks "was a backend chosen?" sees yes-but-blank.
+    # VLLM_ATTENTION_BACKEND="" is the dangerous one; it does not match the
+    # manual invocation that works, where the variable simply isn't there.
+    #
+    # (Prefix assignments also can't be built by substitution: bash decides
+    # what is an assignment word before expanding it, so `${VAR:+NAME=value}`
+    # produces a bare word it then tries to execute - "NCCL_P2P_DISABLE=1:
+    # command not found". Exporting in an if-block avoids both problems.)
+    # if-blocks, not `[ ... ] && export ...`: a failing test in an && chain
+    # interacts with `set -e` in ways that depend on context, and one of
+    # these exports was silently skipped because of it. Explicit is cheaper
+    # than reasoning about it.
+    export CUDA_VISIBLE_DEVICES="$GPUS"
+    if [ -n "${VLLM_ATTENTION_BACKEND_OVERRIDE:-}" ]; then
+        export VLLM_ATTENTION_BACKEND="$VLLM_ATTENTION_BACKEND_OVERRIDE"
+    fi
+    if [ -n "${NCCL_P2P_DISABLE_WORKAROUND:-}" ]; then
+        export NCCL_P2P_DISABLE=1
+    fi
+    if [ -n "${NCCL_IB_DISABLE_WORKAROUND:-}" ]; then
+        export NCCL_IB_DISABLE=1
+    fi
+
     # shellcheck disable=SC2086
-    CUDA_VISIBLE_DEVICES="$GPUS" \
-    VLLM_ATTENTION_BACKEND="$VLLM_ATTENTION_BACKEND_OVERRIDE" \
-    NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE_WORKAROUND:+1}" \
-    NCCL_IB_DISABLE="${NCCL_IB_DISABLE_WORKAROUND:+1}" \
     nohup vllm serve "$MODEL_REPO" \
         --served-model-name "$SERVED_NAME" \
         --tensor-parallel-size "$TP_SIZE" \
         --pipeline-parallel-size "$PP_SIZE" \
+        ${DP_SIZE:+--data-parallel-size "${DP_SIZE:-}"} \
+        ${EXPERT_PARALLEL:+--enable-expert-parallel} \
+        ${DISABLE_CUSTOM_ALL_REDUCE:+--disable-custom-all-reduce} \
         ${QUANTIZATION:+--quantization "${QUANTIZATION:-}"} \
         --kv-cache-dtype "$KV_CACHE_DTYPE" \
         --block-size "$BLOCK_SIZE" \
@@ -173,7 +211,7 @@ start_vllm() {
         ${MAX_NUM_SEQS:+--max-num-seqs "${MAX_NUM_SEQS:-}"} \
         --gpu-memory-utilization "$GPU_MEM_UTILIZATION" \
         ${ENFORCE_EAGER:+--enforce-eager} \
-        --host 0.0.0.0 \
+        ${HOST:+--host "${HOST:-}"} \
         --port "$PORT" \
         > "$LOG_DIR/$SERVER_NAME.log" 2>&1 &
 
@@ -229,7 +267,16 @@ _diagnose_known_failures() {
     if grep -qiE "version of None already set|is shallow and may cause errors" "$logfile"; then
         echo "   -> setuptools-scm couldn't derive a version from this shallow, tagless checkout." >&2
         echo "      ds_setup.sh pins SETUPTOOLS_SCM_PRETEND_VERSION for that; if it persists, delete" >&2
-        echo "      $VLLM_SRC_DIR/vllm.egg-info and rerun with FORCE_REBUILD_VLLM=\"true\"." >&2
+        echo "      Nothing is built from source any more, so this should not occur - if it does," >&2
+        echo "      the venv is likely half-installed: delete \$VENV_DIR and rerun setup.sh." >&2
+    fi
+    if grep -qiE "DP Coordinator process failed to report ZMQ addresses" "$logfile"; then
+        echo "   -> the data-parallel coordinator never came up. Almost always leftover processes" >&2
+        echo "      from a previous run still holding its ZMQ addresses - in DP mode vLLM names" >&2
+        echo "      them EngineCore_DP*/ApiServer_*/DPCoordinator, which older cleanup patterns" >&2
+        echo "      here did not match. Check and clear them:" >&2
+        echo "        pgrep -af 'EngineCore|ApiServer|DPCoordinator|vllm serve'" >&2
+        echo "      If none are running, try DP_SIZE=1 to confirm the model itself starts." >&2
     fi
     if grep -qiE "KeyError: 'model\.layers\.[0-9]+\.mtp_block|mtp_block\." "$logfile"; then
         echo "   -> speculative MTP is on, but this vLLM build's MTP loader expects tensor names" >&2
@@ -241,10 +288,9 @@ _diagnose_known_failures() {
         echo "   -> DeepGEMM was built without SM120 (RTX PRO 6000) support. The revision matters:" >&2
         echo "      the vLLM fork's default pin only handles arch_major 9 and 10, and aborts in" >&2
         echo "      layout.hpp (weight load) or hyperconnection.hpp (memory profiling)." >&2
-        echo "      Check DEEPGEMM_GIT_REF is \"nv_dev\" (currently \"$DEEPGEMM_GIT_REF\") and that" >&2
-        echo "      $DEEPGEMM_SRC_DIR was actually used, then rebuild with FORCE_REBUILD_VLLM=\"true\"." >&2
-        echo "      Note DISABLE_DEEP_GEMM_WORKAROUND does NOT avoid this - parts of the DeepSeek V4" >&2
-        echo "      path call DeepGEMM regardless of that env var." >&2
+        echo "      vLLM 0.26.0+ vendors DeepGEMM kernels that handle SM120, so an up-to-date" >&2
+        echo "      install should not hit this. Check the version (vllm --version) and try" >&2
+        echo "      FORCE_REINSTALL_VLLM=\"true\" to pull a newer one." >&2
     fi
     if grep -qiE "larger than the maximum number of tokens|can be stored in KV cache|decrease max_model_len|To serve at least one request" "$logfile"; then
 
@@ -260,8 +306,8 @@ _diagnose_known_failures() {
     fi
     if grep -qiE "unrecognized model type|Model architectures .* are not supported" "$logfile"; then
         echo "   -> this vLLM build may not know DeepseekV4ForCausalLM." >&2
-        echo "      It is supported on main - check VLLM_GIT_REF and the build log at $LOG_DIR/vllm-build.log," >&2
-        echo "      then set FORCE_REBUILD_VLLM=true to rebuild against a newer commit." >&2
+        echo "      Upgrade vLLM: set FORCE_REINSTALL_VLLM=\"true\" (optionally pin a newer" >&2
+        echo "      VLLM_VERSION) and rerun setup.sh." >&2
     fi
     if grep -qiE "invalid choice|unrecognized arguments" "$logfile"; then
         echo "   -> vLLM rejected a CLI flag. Most likely TOOL_CALL_PARSER/REASONING_PARSER:" >&2
@@ -280,8 +326,9 @@ _diagnose_known_failures() {
     fi
     if grep -qiE "no kernel image is available|CUDA error: no kernel image" "$logfile"; then
         echo "   -> the build didn't produce a kernel for this GPU's architecture." >&2
-        echo "      Check TORCH_CUDA_ARCH_LIST=\"$TORCH_CUDA_ARCH_LIST\" matches this GPU, then set" >&2
-        echo "      FORCE_REBUILD_VLLM=true and rerun (in setup.sh - start.sh doesn't rebuild)." >&2
+        echo "      The PyPI wheel should cover this GPU. Most likely torch does not match the" >&2
+        echo "      driver - reinstall with FORCE_REINSTALL_VLLM=\"true\" so uv re-resolves" >&2
+        echo "      --torch-backend=auto against it." >&2
     fi
     if grep -qiE "Address already in use" "$logfile"; then
         echo "   -> something else on the pod already owns port $PORT (RunPod's own nginx commonly" >&2

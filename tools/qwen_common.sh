@@ -15,30 +15,26 @@
 # CONFIG
 # ---------------------------------------------------------------------------
 
-# --- vLLM build ---
-# Upstream, NOT the jasl SM120 fork the DeepSeek config pins: that fork
-# exists for DeepSeek V4's sparse-MLA attention, which this model doesn't
-# use, and it trails upstream by enough that Qwen3.5 support is a gamble.
-# If the pod image already ships a vLLM that knows `qwen3_5_moe`, don't
-# build at all - use start.sh, which never touches the build path.
-VLLM_GIT_REPO="https://github.com/vllm-project/vllm.git"
-VLLM_GIT_REF="main"
-# Unused here (no DeepGEMM dependency for this model) but still referenced
-# by the shared build step, so keep them pointing somewhere harmless.
-DEEPGEMM_GIT_REPO="https://github.com/deepseek-ai/DeepGEMM.git"
-DEEPGEMM_GIT_REF="nv_dev"
-DEEPGEMM_SRC_DIR="/workspace/deepgemm-src"
-VLLM_SRC_DIR="/workspace/vllm-src"
-VLLM_WHEEL_DIR="/workspace/vllm-wheels"
-# ~228 GiB of weights (244,394,630,034 bytes) - noticeably more than the
-# guide's "~200GB" estimate, and more than DeepSeek V4's 167 GB. Check
-# `df -h /workspace` before starting: RunPod network volumes have a quota
-# well below the size shown in the dashboard.
+# --- Install ---
+# Nothing is built from source: vLLM comes from PyPI into a venv. The whole
+# source-build apparatus that used to sit here (fork checkout, DeepGEMM,
+# wheel cache, TORCH_CUDA_ARCH_LIST/MAX_JOBS) existed to work around SM120
+# aborts that current vLLM handles on its own.
+VLLM_VERSION=""
+FORCE_REINSTALL_VLLM="false"
+# On /workspace, not ~: a RunPod pod's home is on the ephemeral root overlay
+# and is wiped on restart, which would mean reinstalling vLLM and torch
+# every time.
+VENV_DIR="/workspace/serving/.venv"
+VENV_PYTHON="3.12"
+# Runtime dependency, not a build one - vLLM JIT-compiles kernels on first
+# use and needs nvcc for it.
+CUDA_TOOLKIT_VERSION="13.3"
+# ~228 GiB of weights (244,394,630,034 bytes) - more than the guide's
+# "~200GB" estimate and more than DeepSeek V4's 167 GiB. Must live on
+# /workspace; check `df -h /workspace` first, since RunPod network volumes
+# have a quota well below the size shown in the dashboard.
 HF_HOME="/workspace/hf-cache"
-FORCE_REBUILD_VLLM="false"
-TORCH_CUDA_ARCH_LIST="12.0"
-MAX_JOBS="$(nproc)"
-NVCC_THREADS=4
 
 # --- Model ---
 # AWQ INT4, deliberately not the NVFP4 build the guide's own launch
@@ -50,6 +46,22 @@ NVCC_THREADS=4
 MODEL_REPO="QuantTrio/Qwen3.5-397B-A17B-AWQ"
 SERVED_NAME="qwen3.5"
 PORT=8000
+
+# Left EMPTY on purpose - do not set this to 0.0.0.0.
+#
+# A data-parallel run with --host 0.0.0.0 died every time with
+#   RuntimeError: DP Coordinator process failed to report ZMQ addresses
+#   within timeout=120 seconds during startup
+# while the same command without it started fine. --host is the only flag
+# in that diff that touches network addressing, and the DP coordinator
+# derives its ZMQ connect address from the host config (a working run logs
+# it as "mq_connect_ip=172.23.0.2"); 0.0.0.0 is a bind-any wildcard, not an
+# address anything can connect back to.
+#
+# Empty means vLLM's own default, which still serves the SSH tunnel: the
+# tunnel forwards to 127.0.0.1:PORT on the pod. Set it only if you need to
+# reach the server from outside the pod without a tunnel.
+HOST=""
 
 # vocab_size is 248320 = 2^9 * 5 * 97, so 1/2/4/5/8/... divide it and
 # 3/6/7 do not - vLLM shards the vocab embedding across the TP group and
@@ -150,28 +162,6 @@ NCCL_IB_DISABLE_WORKAROUND="1"
 EXTRA_ENV="NCCL_P2P_LEVEL=SYS OMP_NUM_THREADS=8 VLLM_CACHE_ROOT=/workspace/vllm-cache"
 
 
-    CUDA_VISIBLE_DEVICES="0,1,2,3" \
-    VLLM_ATTENTION_BACKEND="" \
-    nohup vllm serve QuantTrio/Qwen3.5-397B-A17B-AWQ \
-        --served-model-name "qwen3.5" \
-        --tensor-parallel-size 4 \
-        --pipeline-parallel-size 1 \
-        --kv-cache-dtype "auto" \
-        --block-size 16 \
-        --speculative-config '{"method":"mtp","num_speculative_tokens":2}' \
-        --tool-call-parser "qwen3_coder" \
-        --reasoning-parser "qwen3" \
-        --enable-auto-tool-choice \
-        --tokenizer-mode "auto" \
-        --trust-remote-code \
-        --max-model-len 100000 \
-        --enable-prefix-caching \
-        --enable-chunked-prefill \
-        --max-num-batched-tokens 8192 \
-        --max-num-seqs 128 \
-        --gpu-memory-utilization 0.93 \
-        --host 0.0.0.0 \
-        --port 8000 \
 # Batching limits from the guide's vLLM command. They shape concurrency
 # rather than single-stream latency, which is where its 1,551 tok/s at 64
 # concurrent users comes from.

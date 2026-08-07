@@ -84,6 +84,46 @@ a given key - it's driven by whatever endpoints `add-endpoint` has
 registered and their `reasoning_profile`, not a fixed list, so check it if
 a model id 404s.
 
+### Context usage and auto-compaction
+
+opencode's context-fill indicator and its auto-compaction both come from
+`limit.context` **in opencode's own config** - it never asks the server how
+big the window is. So the number has to be written down client-side, and it
+has to match the `--max-model-len` vLLM was started with. A mismatch is
+silent in both directions: too low and opencode compacts long before it
+needs to, too high and it overruns the server's window mid-session.
+
+Rather than copying numbers by hand, generate the block from the endpoints
+that are actually registered:
+
+```bash
+docker compose exec api python manage.py opencode-config --base-url http://<host>:8000/v1
+```
+
+That emits every published model id (one per reasoning level) with its
+`limit.context` taken from the endpoint's `ctx_window`, plus:
+
+```json
+"compaction": { "auto": true, "prune": true, "reserved": 8192 }
+```
+
+`auto` is opencode's default already - it is stated explicitly so the
+behaviour is visibly intended. `prune` drops old tool outputs first, which
+in an agentic session are the bulk of the context and the least useful to
+keep verbatim. `reserved` is the headroom opencode keeps free to do the
+compaction itself.
+
+Write the result to `~/.config/opencode/opencode.json` and **both the CLI
+and the desktop app pick it up** - they read the same file. Use
+`./opencode.json` instead to scope it to one project.
+
+Keep `ctx_window` in step with the server whenever `--max-model-len`
+changes:
+
+```bash
+docker compose exec api python manage.py update-endpoint <endpoint_id> --ctx-window 343296
+```
+
 ### Reasoning levels
 
 opencode has no reasoning-effort setting - it only picks a model. So each

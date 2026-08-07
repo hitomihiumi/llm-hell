@@ -320,3 +320,71 @@ async def test_probe_endpoint_persists_report(_use_test_db, monkeypatch, capsys)
         endpoint = await db.get(ModelEndpoint, endpoint_id)
         assert endpoint.last_checked_at is not None
         assert endpoint.last_check_result["native_tools_supported"] is True
+
+
+@pytest.mark.asyncio
+async def test_opencode_config_emits_limits_from_endpoints(_use_test_db, capsys) -> None:
+    """opencode reads limit.context from its own config, never from the
+    server, so a wrong number silently mis-sizes compaction. Generating it
+    from ctx_window is the only thing keeping the two in step."""
+    import json
+
+    async with _use_test_db() as db:
+        db.add(
+            ModelEndpoint(
+                name="DeepSeek",
+                base_url="http://host.docker.internal:8010/v1",
+                model_id="deepseek-v4-flash",
+                role="executor",
+                ctx_window=524288,
+            )
+        )
+        await db.commit()
+
+    await manage.cmd_opencode_config(
+        Namespace(base_url="http://proxy:8000/v1", reserved=8192, max_output=32768)
+    )
+    config = json.loads(capsys.readouterr().out)
+
+    models = config["provider"]["llmhell"]["models"]
+    # One id per reasoning level, each carrying the endpoint's real window.
+    assert set(models) == {
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-low",
+        "deepseek-v4-flash-medium",
+        "deepseek-v4-flash-high",
+    }
+    for model in models.values():
+        assert model["limit"]["context"] == 524288
+        # output is carved out of the context window, not added to it.
+        assert model["limit"]["output"] <= 524288 // 4
+
+    assert config["compaction"]["auto"] is True
+    assert config["compaction"]["prune"] is True
+    assert config["provider"]["llmhell"]["options"]["baseURL"] == "http://proxy:8000/v1"
+
+
+@pytest.mark.asyncio
+async def test_opencode_config_caps_output_for_small_windows(_use_test_db, capsys) -> None:
+    import json
+
+    async with _use_test_db() as db:
+        db.add(
+            ModelEndpoint(
+                name="Small",
+                base_url="http://x/v1",
+                model_id="small",
+                role="executor",
+                ctx_window=32768,
+                reasoning_profile={"parse": {}},  # no levels -> single id
+            )
+        )
+        await db.commit()
+
+    await manage.cmd_opencode_config(
+        Namespace(base_url="http://proxy:8000/v1", reserved=8192, max_output=65536)
+    )
+    models = json.loads(capsys.readouterr().out)["provider"]["llmhell"]["models"]
+    # Without the cap this would claim a 32768-token output inside a
+    # 32768-token window, leaving no room for the prompt at all.
+    assert models["small"]["limit"]["output"] == 8192

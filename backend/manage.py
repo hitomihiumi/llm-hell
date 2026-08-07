@@ -13,8 +13,10 @@ Postgres (see .env.example).
 
 import argparse
 import asyncio
+import json
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select
 
@@ -168,6 +170,78 @@ async def cmd_update_endpoint(args: argparse.Namespace) -> None:
             print(f"now publishing: {published}")
 
 
+async def cmd_opencode_config(args: argparse.Namespace) -> None:
+    """Emit a ready-to-paste opencode provider block.
+
+    opencode shows a context-fill indicator and decides when to auto-compact
+    from `limit.context` in ITS OWN config - it never asks the server. So the
+    number has to be written down client-side, and it has to match what vLLM
+    actually serves (`--max-model-len`). Getting it wrong is silent in both
+    directions: too low and opencode compacts long before it needs to, too
+    high and it overflows the server's window mid-session.
+
+    Generating it from the endpoints registered here keeps the two in step
+    instead of relying on someone copying numbers by hand.
+    """
+    async with SessionLocal() as db:
+        endpoints = (
+            await db.execute(
+                select(ModelEndpoint).where(ModelEndpoint.enabled.is_(True)).order_by(ModelEndpoint.name)
+            )
+        ).scalars().all()
+
+    if not endpoints:
+        print("no enabled endpoints - nothing to generate", file=sys.stderr)
+        raise SystemExit(1)
+
+    models: dict[str, Any] = {}
+    for endpoint in endpoints:
+        for model_id, level in published_model_ids(endpoint):
+            label = endpoint.name if level == "off" else f"{endpoint.name} (reasoning: {level})"
+            models[model_id] = {
+                "name": label,
+                "limit": {
+                    # Both are required by opencode's schema. `context` is the
+                    # server's --max-model-len; `output` is carved out of it,
+                    # not additional, so it is capped at a quarter of the
+                    # window here rather than being a second budget.
+                    "context": endpoint.ctx_window,
+                    "output": min(args.max_output, endpoint.ctx_window // 4),
+                },
+            }
+
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+            "llmhell": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "LLM-Hell",
+                "options": {"baseURL": args.base_url, "apiKey": "{env:LLMHELL_API_KEY}"},
+                "models": models,
+            }
+        },
+        "model": f"llmhell/{next(iter(models))}",
+        "compaction": {
+            # auto is opencode's default already; stated explicitly so it is
+            # obvious the behaviour is intended rather than inherited.
+            "auto": True,
+            # Drop old tool outputs first - in an agentic session those are
+            # the bulk of the context and the least useful to keep verbatim.
+            "prune": True,
+            "reserved": args.reserved,
+        },
+    }
+
+    print(json.dumps(config, indent=2, ensure_ascii=False))
+    print(
+        "\n# Write to ~/.config/opencode/opencode.json for both the CLI and the\n"
+        "# desktop app (they read the same file), or ./opencode.json for one project.\n"
+        "# limit.context values come from each endpoint's ctx_window - keep those in\n"
+        "# sync with the server's --max-model-len.",
+        file=sys.stderr,
+    )
+
+
 async def cmd_list_endpoints(args: argparse.Namespace) -> None:
     async with SessionLocal() as db:
         endpoints = (await db.execute(select(ModelEndpoint).order_by(ModelEndpoint.name))).scalars().all()
@@ -277,6 +351,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = subparsers.add_parser("list-endpoints", help="List all configured model endpoints")
     p.set_defaults(func=cmd_list_endpoints)
+
+    p = subparsers.add_parser(
+        "opencode-config",
+        help="Print an opencode provider config with correct per-model context limits",
+    )
+    p.add_argument(
+        "--base-url",
+        default="http://localhost:8000/v1",
+        help="What testers' opencode should call - this proxy's address, not the vLLM pod's",
+    )
+    p.add_argument(
+        "--reserved",
+        type=int,
+        default=8192,
+        help="Tokens opencode keeps free as compaction headroom (default: 8192)",
+    )
+    p.add_argument(
+        "--max-output",
+        type=int,
+        default=65536,
+        help="Cap for limit.output; also capped at a quarter of each model's context",
+    )
+    p.set_defaults(func=cmd_opencode_config)
 
     p = subparsers.add_parser(
         "probe-endpoint", help="Probe a real vLLM endpoint's reasoning/tool-call behaviour"
