@@ -69,15 +69,46 @@ Add a custom provider to `opencode.json` (project-local or
         "apiKey": "{env:LLMHELL_API_KEY}"
       },
       "models": {
-        "deepseek-v4-flash": { "name": "DeepSeek V4 Flash" },
-        "deepseek-v4-flash-medium": { "name": "DeepSeek V4 Flash (reasoning: medium)" },
-        "deepseek-v4-flash-high": { "name": "DeepSeek V4 Flash (reasoning: high)" }
+        "deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash",
+          "reasoning": true,
+          "interleaved": "reasoning_content",
+          "limit": { "context": 343296, "output": 32768 }
+        },
+        "deepseek-v4-flash-medium": {
+          "name": "DeepSeek V4 Flash (reasoning: medium)",
+          "reasoning": true,
+          "interleaved": "reasoning_content",
+          "limit": { "context": 343296, "output": 32768 }
+        },
+        "deepseek-v4-flash-high": {
+          "name": "DeepSeek V4 Flash (reasoning: high)",
+          "reasoning": true,
+          "interleaved": "reasoning_content",
+          "limit": { "context": 343296, "output": 32768 }
+        }
       }
     }
   },
-  "model": "llmhell/deepseek-v4-flash"
+  "model": "llmhell/deepseek-v4-flash",
+  "compaction": { "auto": true, "prune": true, "reserved": 8192 }
 }
 ```
+
+`reasoning` and `interleaved` are what keep the model's thinking out of the
+normal transcript. vLLM emits it in a separate `reasoning_content` field
+(that is what `--reasoning-parser` produces), but opencode does not assume
+that name - without `interleaved` pointing at it, the thinking is rendered
+as ordinary assistant text, interleaved with tool calls.
+
+`limit` is not optional: opencode's schema requires `context` and `output`,
+and without them there is no context-fill indicator and nothing for
+auto-compaction to trigger against. `context` must equal the server's
+`--max-model-len` (343296 here), and `output` is carved **out of** that
+window rather than added to it - see the section below.
+
+Don't hand-maintain those numbers; `manage.py opencode-config` prints this
+whole block with the limits filled in from the registered endpoints.
 
 `GET /v1/models` reports exactly which model ids are currently valid for
 a given key - it's driven by whatever endpoints `add-endpoint` has

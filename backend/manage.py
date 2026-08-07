@@ -200,6 +200,13 @@ async def cmd_opencode_config(args: argparse.Namespace) -> None:
             label = endpoint.name if level == "off" else f"{endpoint.name} (reasoning: {level})"
             models[model_id] = {
                 "name": label,
+                # Without these two, thinking shows up as ordinary assistant
+                # text in the transcript. `reasoning` marks the model as
+                # capable; `interleaved` names the field the reasoning
+                # actually arrives in - vLLM and DeepSeek use
+                # `reasoning_content`, and opencode does not assume it.
+                "reasoning": True,
+                "interleaved": "reasoning_content",
                 "limit": {
                     # Both are required by opencode's schema. `context` is the
                     # server's --max-model-len; `output` is carved out of it,
