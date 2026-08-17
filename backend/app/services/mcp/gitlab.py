@@ -25,7 +25,6 @@ README (docs/mcp-spike-findings.md):
     rewritten onto `settings.gitlab_web_url`.
 """
 
-import asyncio
 import logging
 import time
 from typing import Any

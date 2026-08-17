@@ -52,21 +52,50 @@ async def run_seed() -> None:
         await db.commit()
 
 
+def _is_configured(key: str) -> bool:
+    """Whether this source has the credentials it needs to answer at all.
+
+    A source seeded enabled but unreachable is not merely useless, it is a
+    tax on the ones that work: the fan-out waits for the slowest source, and
+    a DNS failure against a container that was never started costs several
+    seconds on EVERY search. So an unconfigured source starts disabled and
+    the setup docs say to switch it on.
+    """
+    if key in (SOURCE_GOOGLE_DRIVE, SOURCE_GOOGLE_MAIL):
+        return bool(settings.google_client_id and settings.google_client_secret)
+    if key == SOURCE_GITLAB:
+        return bool(settings.gitlab_personal_access_token)
+    if key == SOURCE_POSTGRES_KB:
+        return bool(settings.kb_search_tables)
+    return True
+
+
 async def _seed_sources(db) -> None:
     """Insert any missing default source. Existing rows are left alone -
     an operator who disabled a source or retuned its weight must not have
     that reverted by a restart."""
-    existing = set(
-        (await db.execute(select(Source.key))).scalars().all()
-    )
+    existing = set((await db.execute(select(Source.key))).scalars().all())
     added = [
-        Source(key=key, kind=kind, display_name=display_name, weight=weight, secret_ref=secret_ref, config={})
+        Source(
+            key=key,
+            kind=kind,
+            display_name=display_name,
+            weight=weight,
+            secret_ref=secret_ref,
+            enabled=_is_configured(key),
+            config={},
+        )
         for key, (kind, display_name, weight, secret_ref) in _DEFAULT_SOURCES.items()
         if key not in existing
     ]
     if added:
         db.add_all(added)
-        logger.info("Seeded %d source(s): %s", len(added), ", ".join(s.key for s in added))
+        for source in added:
+            logger.info(
+                "Seeded source %s (%s)",
+                source.key,
+                "enabled" if source.enabled else "disabled - no credentials configured",
+            )
 
 
 async def _seed_mock_endpoints(db) -> None:

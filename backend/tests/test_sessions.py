@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -126,7 +126,7 @@ async def test_resolve_session_refreshes_last_seen_when_stale(session_maker):
     async with session_maker() as db:
         session, raw = await create_session(db, user)
 
-    stale = datetime.now(timezone.utc) - timedelta(hours=1)
+    stale = datetime.now(UTC) - timedelta(hours=1)
     async with session_maker() as db:
         stored = await db.get(UserSession, session.id)
         stored.last_seen_at = stale
@@ -139,7 +139,7 @@ async def test_resolve_session_refreshes_last_seen_when_stale(session_maker):
         stored = await db.get(UserSession, session.id)
         last_seen = stored.last_seen_at
         if last_seen.tzinfo is None:
-            last_seen = last_seen.replace(tzinfo=timezone.utc)
+            last_seen = last_seen.replace(tzinfo=UTC)
         assert last_seen > stale
 
 

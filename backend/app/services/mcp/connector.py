@@ -18,7 +18,6 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.endpoint import ModelEndpoint
-from app.models.source import Source
 from app.models.user import User
 from app.schemas.search import SearchHit
 

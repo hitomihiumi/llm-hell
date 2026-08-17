@@ -15,7 +15,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -108,7 +108,7 @@ async def cmd_revoke_key(args: argparse.Namespace) -> None:
             print(f"no key with prefix {args.key_prefix!r}", file=sys.stderr)
             raise SystemExit(1)
 
-        api_key.revoked_at = datetime.now(timezone.utc)
+        api_key.revoked_at = datetime.now(UTC)
         await db.commit()
         print(f"revoked key {api_key.name!r} (prefix={api_key.key_prefix})")
 
@@ -324,7 +324,7 @@ async def cmd_probe_endpoint(args: argparse.Namespace) -> None:
 
         report = await check_endpoint(endpoint)
 
-        endpoint.last_checked_at = datetime.now(timezone.utc)
+        endpoint.last_checked_at = datetime.now(UTC)
         endpoint.last_check_result = report.to_dict()
         await db.commit()
 

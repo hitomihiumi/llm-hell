@@ -6,7 +6,7 @@ time, printed once by `manage.py issue-key` and never stored anywhere.
 """
 
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -68,7 +68,7 @@ async def get_current_key_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or revoked API key")
 
     user, api_key = result
-    api_key.last_used_at = datetime.now(timezone.utc)
+    api_key.last_used_at = datetime.now(UTC)
     await db.commit()
 
     return user, api_key

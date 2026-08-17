@@ -80,7 +80,7 @@ async def _run_one(
     started = time.monotonic()
     try:
         return await asyncio.wait_for(connector.search(query, limit=limit, ctx=ctx), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return SourceResult(
             source_key=source.key,
             elapsed_ms=int((time.monotonic() - started) * 1000),

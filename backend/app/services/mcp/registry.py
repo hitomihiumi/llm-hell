@@ -22,6 +22,7 @@ Spawning per request is not an option either - `npx` cold start plus the
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 from dataclasses import dataclass
@@ -70,10 +71,10 @@ class StdioSupervisor:
         if self._task is None:
             return
         self._task.cancel()
-        try:
+        # Awaiting a cancelled task re-raises CancelledError; that is the
+        # expected outcome here, not a failure.
+        with contextlib.suppress(asyncio.CancelledError):
             await self._task
-        except asyncio.CancelledError:
-            pass
         self._task = None
 
     async def call(

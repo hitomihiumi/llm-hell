@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -44,7 +44,7 @@ class ModelEndpoint(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     base_url: Mapped[str] = mapped_column(String(512), nullable=False)
-    api_key: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    api_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     model_id: Mapped[str] = mapped_column(String(256), nullable=False)
     # Free-form label (e.g. "planner", "executor", "fast") - purely
     # descriptive under the proxy, which routes by `model` id, not role.
@@ -55,6 +55,6 @@ class ModelEndpoint(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     reasoning_profile: Mapped[dict[str, Any]] = mapped_column(JSON, default=lambda: DEFAULT_REASONING_PROFILE)
     tools_mode: Mapped[str] = mapped_column(String(16), default="json_protocol", nullable=False)  # native | json_protocol
-    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_check_result: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_check_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

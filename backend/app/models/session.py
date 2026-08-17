@@ -21,7 +21,6 @@ over usable session tokens.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -38,11 +37,11 @@ class UserSession(Base, TimestampMixin):
     # sha256 hex digest of the raw token. 64 chars exactly.
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
 
-    user_agent: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Refreshed at most once a minute rather than on every request - see
     # `app.core.sessions.resolve_session`.
-    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

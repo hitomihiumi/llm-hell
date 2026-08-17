@@ -267,7 +267,7 @@ async def test_update_endpoint_applies_only_given_fields(_use_test_db) -> None:
 
 
 def _update_args(endpoint_id: str, **overrides):
-    base = dict(
+    base = dict(  # noqa: C408 - keyword form reads better for argparse defaults
         endpoint_id=endpoint_id,
         name=None,
         base_url=None,

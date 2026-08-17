@@ -1,264 +1,246 @@
-# LLM-Hell
+# LLM-Hell — federated knowledge base
 
-An OpenAI-compatible metrics proxy that sits between opencode (run by ~20
-testers on their own machines, against their own real repos) and a pair
-of GLM 4.7 / GLM 4.7 Flash vLLM endpoints on RunPod. Testers point their
-`opencode.json` at this service instead of RunPod directly; the agent
-loop, tool-calling, and file editing all happen inside opencode, entirely
-out of this service's view. What this service does:
+Search Google Workspace, GitLab and a Postgres knowledge base from one box,
+and get an answer written over the results with citations that link back to
+the exact document, file or row they came from.
 
-- authenticates each tester by a personal API key,
-- routes a requested `model` id to the right RunPod endpoint,
-- forwards the request byte-for-byte (streaming or not) so nothing about
-  opencode's expectations of the response shape gets lost in translation,
-- and records technical metrics (TTFT, tokens, cost, tool-call counts,
-  errors) into Postgres and Prometheus for the Grafana dashboards.
+Each source is reached through its own **MCP server**; the service is the MCP
+*client*. The LLM endpoint that used to be merely proxied is now the answer
+engine — it reads the search results and writes the answer.
 
-See `docker-compose.yml` for the service layout: `api` (FastAPI, the
-proxy itself), `postgres`, `prometheus`, `grafana`, and an optional
-`mock-vllm` service for local development without a GPU.
+```
+Next.js (:3001) ──/api/*──> FastAPI (:8000)
+                                 │
+                   ┌─────────────┼──────────────┬──────────────┐
+                   │             │              │              │
+             gitlab-mcp    postgres-mcp    google-mcp     ModelEndpoint
+             (http /mcp)   (sse /sse)      (http /mcp)    (vLLM: answers)
+```
 
-## Local development (no GPU required)
+A search fans out to every enabled source in parallel, normalises the results
+into one shape, fuses the rankings, and streams the answer back over SSE.
+**One unreachable source degrades the result list; it never empties it.**
+
+## What it does
+
+- **Minimal auth** — username + password, httpOnly cookie session.
+- **Federated search** with a deep link on every hit: a Drive/Gmail
+  permalink, a GitLab blob URL with a line anchor, or an internal record page
+  for a database row.
+- **A cited answer.** Every `[n]` in the answer is resolved against the hits
+  that were actually in the prompt; a number the model invented is dropped
+  and counted, never rendered as a link.
+- **Per-source honesty.** Each source reports its hit count, latency, and —
+  when it failed — why. The Postgres source also shows the SQL it generated
+  and whether that came from the model or the deterministic fallback.
+
+The original OpenAI-compatible metrics proxy is untouched and still serves
+`/v1/*` for opencode; see [docs/proxy.md](docs/proxy.md).
+
+---
+
+## Quick start
 
 ```bash
 cp .env.example .env
-docker compose --profile dev up --build
-docker compose exec api alembic upgrade head
+# edit .env: at minimum set POSTGRES_PASSWORD and USE_MOCK_VLLM=true
+docker compose --profile dev up -d --build
 ```
 
-This starts the whole stack plus `mock-vllm`, an OpenAI/vLLM-compatible
-stub (see `tools/mock_vllm.py`) that gets seeded as the backing endpoint
-for both `glm-4.7*` model ids when `USE_MOCK_VLLM=true` in `.env`. It
-emulates streaming, reasoning output (both `reasoning_content` and inline
-`<think>` tag styles), tool calls, and a usage-bearing final SSE chunk, so
-the proxy's passthrough and metrics recording can be exercised end to end
-without a real endpoint.
+`--profile dev` adds `mock-vllm`, a GPU-free stand-in for the answer model,
+so the whole pipeline works without a RunPod pod.
 
-- API: http://localhost:8000 (`GET /api/health`, `GET /v1/models`, `POST
-  /v1/chat/completions`, `GET /metrics`)
-- Grafana: http://localhost:3000
-- Prometheus: http://localhost:9090
-
-There's no web admin panel - create the first tester and hand them a key
-via the management CLI:
+Create an account:
 
 ```bash
-docker compose exec api python manage.py create-user alice
-docker compose exec api python manage.py issue-key alice --name laptop
+docker compose exec api python manage.py create-user demo --password 'choose-something' --role admin
 ```
 
-`issue-key` prints the raw key exactly once; put it straight into the
-tester's `opencode.json`. See `manage.py --help` (and each subcommand's
-`--help`) for the rest: `revoke-key`, `list-keys`, `add-endpoint`,
-`update-endpoint`, `list-endpoints`, `probe-endpoint`.
+Then open **http://localhost:3001** and sign in.
 
-## Tester setup (opencode)
+| service | URL | notes |
+| --- | --- | --- |
+| web | http://localhost:3001 | the demo app |
+| api | http://localhost:8000 | `/api/*` and the `/v1/*` proxy |
+| grafana | http://localhost:3000 | unchanged; owns 3000, which is why web is on 3001 |
+| prometheus | http://localhost:9090 | |
 
-Add a custom provider to `opencode.json` (project-local or
-`~/.config/opencode/opencode.json`):
+Migrations run automatically when `api` starts.
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "llmhell": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "LLM-Hell",
-      "options": {
-        "baseURL": "http://<host>:8000/v1",
-        "apiKey": "{env:LLMHELL_API_KEY}"
-      },
-      "models": {
-        "deepseek-v4-flash": {
-          "name": "DeepSeek V4 Flash",
-          "reasoning": true,
-          "interleaved": { "field": "reasoning" },
-          "limit": { "context": 343296, "output": 32768 }
-        }
-      }
-    }
-  },
-  "model": "llmhell/deepseek-v4-flash",
-  "compaction": { "auto": true, "prune": true, "reserved": 8192 }
-}
-```
+---
 
-`reasoning` and `interleaved` are what keep the model's thinking out of the
-normal transcript. `--reasoning-parser` makes vLLM split it into its own
-field, but opencode does not guess which one - without `interleaved`
-pointing at it, the thinking is rendered as ordinary assistant text,
-interleaved with tool calls.
+## Connecting the sources
 
-The field name is **`reasoning`**, confirmed against a real vLLM 0.26.0
-response (the assistant message carries `"reasoning": null` next to
-`"content"`). Older vLLM used `reasoning_content`, and opencode's enum
-still lists it, but pointing at a field this server never sends has exactly
-the same effect as not setting `interleaved` at all. Check yours before
-trusting either name:
+Nothing needs to be connected for the app to start. An unconfigured source
+reports why on the **Sources** page rather than disappearing.
+
+### Postgres knowledge base — works out of the box
+
+`docker/postgres/initdb/` creates a separate `kb` database, a read-only
+`kb_ro` role, and a small demo corpus.
+
+Searching it means asking the model to write a `SELECT`. That path has four
+layers of protection, and **only the last two matter**:
+
+1. the model is given the real schema, so it does not guess;
+2. a validator rejects anything that is not a single read-only statement;
+3. `postgres-mcp` runs `--access-mode=restricted`, parsing every statement;
+4. `kb_ro` is `SELECT`-only, with a 5s statement timeout, against a database
+   that does not contain the application's own tables and which it cannot
+   even `CONNECT` to.
+
+Layer 4 is why a prompt injection hidden in an indexed document is not a
+vulnerability — the SQL it induces simply fails. Verify it yourself:
 
 ```bash
-curl -s http://<pod>:8000/v1/chat/completions -H 'Content-Type: application/json'   -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}'   | python3 -m json.tool | grep -i reason
+docker compose exec -e PGPASSWORD=kb_ro_password postgres \
+  psql -U kb_ro -d kb -c "SELECT * FROM users"
+# ERROR: relation "users" does not exist
 ```
 
-Use the object form, `{ "field": "reasoning" }`. opencode's published
-schema also accepts a bare string there, but shipped builds reject it with
-`Expected true | object | undefined` - the object works on both.
+> The initdb scripts only run on an **empty** volume. On an existing stack,
+> pipe them through `psql` by hand — the header of `01-create-kb.sql` has the
+> command.
 
-`limit` is not optional: opencode's schema requires `context` and `output`,
-and without them there is no context-fill indicator and nothing for
-auto-compaction to trigger against. `context` must equal the server's
-`--max-model-len` (343296 here), and `output` is carved **out of** that
-window rather than added to it - see the section below.
+### GitLab
 
-Don't hand-maintain those numbers; `manage.py opencode-config` prints this
-whole block with the limits filled in from the registered endpoints.
-
-`GET /v1/models` reports exactly which model ids are currently valid for
-a given key - it's driven by whatever endpoints `add-endpoint` has
-registered, not a fixed list, so check it if a model id 404s.
-
-### Context usage and auto-compaction
-
-opencode's context-fill indicator and its auto-compaction both come from
-`limit.context` **in opencode's own config** - it never asks the server how
-big the window is. So the number has to be written down client-side, and it
-has to match the `--max-model-len` vLLM was started with. A mismatch is
-silent in both directions: too low and opencode compacts long before it
-needs to, too high and it overruns the server's window mid-session.
-
-Rather than copying numbers by hand, generate the block from the endpoints
-that are actually registered:
+Create a **classic** personal access token with the `read_api` scope, then:
 
 ```bash
-docker compose exec api python manage.py opencode-config --base-url http://<host>:8000/v1
+GITLAB_PERSONAL_ACCESS_TOKEN=glpat-...
+GITLAB_API_URL=http://host.docker.internal:32769/api/v4   # your instance
+GITLAB_WEB_URL=http://localhost:32769                     # what a browser can reach
+GITLAB_MCP_AUTH_TOKEN=<any random string>
 ```
 
-That emits one entry per registered endpoint, with `limit.context` taken
-from its `ctx_window`, plus:
+Three things that will otherwise cost you an hour each:
 
-```json
-"compaction": { "auto": true, "prune": true, "reserved": 8192 }
-```
+- **A fine-grained token needs `Metadata: Read` + `Projects: Read` +
+  `Code: Read`.** Short of that every call returns
+  `403 insufficient_granular_scope`. A classic `read_api` token is one
+  checkbox.
+- **`search_code` does not work on Community Edition.** Instance-wide code
+  search is GitLab *advanced search*, which is Elasticsearch-backed and
+  Premium/Ultimate only; CE answers `400 scope does not have a valid value`.
+  The connector detects this once and switches to per-project search, which
+  works on any tier. Set `GITLAB_DEFAULT_PROJECT_IDS` to skip the discovery
+  round-trip.
+- **`GITLAB_MCP_AUTH_TOKEN` is not a GitLab credential.** It is a shared
+  secret gating the sidecar's own HTTP endpoint, which the server insists on
+  before it will serve a server-side PAT over the network.
 
-`auto` is opencode's default already - it is stated explicitly so the
-behaviour is visibly intended. `prune` drops old tool outputs first, which
-in an agentic session are the bulk of the context and the least useful to
-keep verbatim. `reserved` is the headroom opencode keeps free to do the
-compaction itself.
+### Google Workspace
 
-Write the result to `~/.config/opencode/opencode.json` and **both the CLI
-and the desktop app pick it up** - they read the same file. Use
-`./opencode.json` instead to scope it to one project.
-
-Keep `ctx_window` in step with the server whenever `--max-model-len`
-changes:
+The awkward one: the MCP server is stdio-only, shells out to a separate Rust
+CLI, and needs a browser consent that cannot happen in a container. It is
+behind an opt-in profile for that reason.
 
 ```bash
-docker compose exec api python manage.py update-endpoint <endpoint_id> --ctx-window 343296
+docker compose --profile google up -d --build google-mcp
 ```
 
-### Reasoning levels
+Follow **[docs/google-workspace-setup.md](docs/google-workspace-setup.md)** —
+it is a step-by-step runbook, and the OAuth flow is done once on a
+workstation with the resulting tokens mounted in.
 
-Pick the level with **opencode's own effort selector** (Default / Low /
-Medium / High / Max), next to the model name in the composer. It sends
-`reasoning_effort` on the request and the proxy forwards it untouched.
+---
 
-There is deliberately no `-low`/`-medium`/`-high` model id. This service
-used to publish one per level, because opencode was thought to have no
-notion of effort - it does, and the two mechanisms fought: the proxy
-overwrote whatever the selector had chosen with the level implied by the
-model id, so the selector appeared to do nothing.
-
-The level is recorded on each request row from what the client actually
-sent (`default` when nothing was), so the Grafana dashboards still break
-cost and latency down by level.
-
-One escape hatch survives, for a model that misbehaves when asked for an
-effort level at all - GLM-4.7 emitted looping garbage for every value.
-Clearing that endpoint's `levels` makes the proxy strip `reasoning_effort`
-before forwarding, so the selector becomes a no-op for it instead of
-breaking generation:
+## Operating it
 
 ```bash
-docker compose exec api python manage.py update-endpoint <endpoint_id> --disable-reasoning-levels
+docker compose exec api python manage.py list-sources
+docker compose exec api python manage.py set-password demo 'new-password'
+docker compose exec api python manage.py list-endpoints
 ```
 
-## Production (RunPod-backed)
+Pin which model writes answers with `ANSWER_MODEL_ID=<model_id>`; leaving it
+empty uses the first enabled endpoint. If no endpoint is registered at all,
+search still returns its hits and simply has no answer — the result list
+never depends on the LLM being up.
+
+### Checking a source
+
+What a source can actually do is not knowable from configuration. Press
+**Check** on the Sources page, or:
 
 ```bash
-cp .env.example .env
-# set USE_MOCK_VLLM=false
-docker compose up --build -d
-docker compose exec api alembic upgrade head
+curl -X POST localhost:8000/api/sources/gitlab/check -b cookies -H "X-CSRF-Token: ..."
 ```
 
-Then register the two real RunPod vLLM endpoints and probe each one
-before relying on it - the real reasoning delivery (`reasoning_content`
-field vs. inline `<think>` tags) and native tool-call support are
-endpoint-specific and unknown until checked:
+It asks the server for its tool list and stores the answer, which is how you
+find out that a GitLab instance has no code search or that the `search`
+toolset was never enabled.
+
+### Probing a server directly
 
 ```bash
-docker compose exec api python manage.py add-endpoint \
-  --name "GLM 4.7 planner" --base-url https://<runpod-host>/v1 --model-id glm-4.7 --role planner
-docker compose exec api python manage.py probe-endpoint <endpoint-id>
+python tools/mcp_probe.py --url http://localhost:3102/mcp \
+  --header "Authorization: Bearer $GITLAB_MCP_AUTH_TOKEN" list
+
+python tools/mcp_probe.py --sse http://localhost:8002/sse \
+  call execute_sql '{"sql":"SELECT 1"}'
 ```
 
-`probe-endpoint` writes what it found to `model_endpoints.reasoning_profile`
-so admins can adjust `tools_mode` there if the probe's reported handling
-doesn't match; the proxy already forwards streaming and non-streaming
-tool-calling requests as opencode sends them either way.
+Standalone — no app, no database. **None of these servers documents its
+response shapes**, so this is how the result adapters were written; see
+[docs/mcp-spike-findings.md](docs/mcp-spike-findings.md) for what probing
+actually found, most of which contradicted the documentation.
 
-If RunPod isn't reachable directly (no public port, or you'd rather not
-expose vLLM to the internet) and you're tunneling instead, bind the
-tunnel on `0.0.0.0`, not the default loopback-only - a port only bound to
-127.0.0.1 on this host is invisible from inside the `api` container on
-native Linux Docker:
+---
 
-```bash
-ssh -L 0.0.0.0:8000:127.0.0.1:8000 -L 0.0.0.0:8002:127.0.0.1:8002 <runpod-ssh-target>
-```
-
-then use `host.docker.internal` (routed in via `extra_hosts` in
-`docker-compose.yml`) instead of `<runpod-host>` as the endpoint's host:
-
-```bash
-docker compose exec api python manage.py add-endpoint \
-  --name "GLM 4.7 planner" --base-url http://host.docker.internal:8000/v1 --model-id glm-4.7 --role planner
-docker compose exec api python manage.py add-endpoint \
-  --name "GLM 4.7 Flash executor" --base-url http://host.docker.internal:8002/v1 --model-id glm-4.7-flash --role executor
-```
-
-## Backend development
+## Development
 
 ```bash
 cd backend
-python -m venv .venv
-.venv/Scripts/activate  # .venv/bin/activate on Linux/macOS
+python -m venv .venv && .venv/Scripts/activate   # .venv/bin/activate elsewhere
 pip install -r requirements-dev.txt
 pytest
+ruff check .
 ```
-
-Database migrations:
 
 ```bash
-alembic upgrade head
+cd frontend
+pnpm install
+pnpm dev          # :3000 by default; use --port 3001 to match compose
+pnpm lint
 ```
 
-## Project layout
+Tests use in-memory SQLite, so **no Postgres-only column types** may appear
+in `app/models/` — no `JSONB`, `ARRAY`, `UUID`, `TSVECTOR`. The first one
+added takes the whole API-level suite down with it.
+
+Migrations are not exercised by the suite (`conftest.py` builds the schema
+with `create_all`), so check them by hand before committing one:
+
+```bash
+docker compose exec api alembic upgrade head
+docker compose exec api alembic downgrade -1
+docker compose exec api alembic upgrade head
+```
+
+### Layout
 
 ```
 backend/
-  manage.py       operator CLI: users, API keys, model endpoints, probing
+  manage.py            operator CLI: users, keys, endpoints, sources
   app/
-    api/          FastAPI routers: openai_proxy (/v1/*), metrics (/metrics)
-    core/         config, db, security (argon2), api_keys (bearer auth)
-    models/       SQLAlchemy: User, ApiKey, ModelEndpoint, LlmRequest
+    api/               auth, search, sources, records, debug, openai_proxy, metrics
+    core/              config, db, security, sessions (cookie), api_keys (bearer)
+    models/            User, UserSession, Source, SearchQuery, ModelEndpoint, LlmRequest
     services/
-      llm/        reasoning profiles, tokenizer, model routing, endpoint probe
-      stats/      recorder (llm_requests + Prometheus), prom (metric defs)
-    alembic/ tests/
-tools/mock_vllm.py  local stand-in for the RunPod vLLM endpoints
-grafana/ prometheus/  dashboards and scrape config
+      mcp/             transport (the ONLY file importing the MCP SDK),
+                       connector protocol, registry, and one module per source
+      search/          federation, RRF ranking, text2sql, answer synthesis
+      llm/             chat client, reasoning parser, tokenizer
+frontend/src/
+  proxy.ts             auth gate (Next 16: this replaces middleware.ts)
+  app/(app)/           search, sources, records — behind the real auth check
+  app/api/search/stream/route.ts   SSE passthrough
+docker/
+  google-mcp/          the stdio->HTTP bridged Google server
+  postgres/initdb/     kb database, kb_ro role, demo corpus
+tools/mcp_probe.py     standalone MCP prober
+docs/                  spike findings, Google runbook, proxy notes
 ```
 
-All code, comments, and developer docs are in English.
+All code, comments and developer docs are in English.

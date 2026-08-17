@@ -15,7 +15,8 @@ bytes is parsed on the side (`ReasoningStreamParser`, already used for the
 
 import json
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Request

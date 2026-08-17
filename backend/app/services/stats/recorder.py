@@ -9,7 +9,7 @@ so both paths record identically.
 import hashlib
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +75,7 @@ def extract_session_ids(
         return session_id, parent_session_id
 
     first_message = _first_user_message_text(messages)
-    digest = hashlib.sha256(f"{api_key_id}:{first_message}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{api_key_id}:{first_message}".encode()).hexdigest()
     return f"fallback-{digest[:32]}", parent_session_id
 
 
@@ -124,7 +124,7 @@ async def record_request(
             cost_usd=cost_usd,
             ttft_ms=int(outcome.ttft_seconds * 1000) if outcome.ttft_seconds is not None else None,
             duration_ms=int(duration_seconds * 1000),
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
     )
     await db.commit()

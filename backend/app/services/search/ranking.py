@@ -19,7 +19,7 @@ any judged relevance set, and pretending otherwise would be worse than
 saying so.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.schemas.search import SearchHit
 
@@ -51,9 +51,9 @@ def recency_factor(timestamp: datetime | None, *, now: datetime | None = None) -
     """
     if timestamp is None:
         return 1.0
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
+        timestamp = timestamp.replace(tzinfo=UTC)
 
     age_days = (now - timestamp).total_seconds() / 86400
     if age_days <= 0:

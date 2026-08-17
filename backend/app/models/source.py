@@ -14,7 +14,7 @@ only way to find out is to ask it.
 """
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -52,10 +52,10 @@ class Source(Base, TimestampMixin):
     # The NAME of the Settings/env field holding this source's credential -
     # never the credential. Secrets stay in the environment; the row only
     # records which one to read, so a database dump leaks nothing.
-    secret_ref: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    secret_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_check_result: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_check_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False

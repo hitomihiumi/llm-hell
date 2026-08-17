@@ -11,7 +11,7 @@ rather than argon2.
 
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
@@ -62,7 +62,7 @@ async def create_session(
         token_hash=token_hash,
         user_agent=(user_agent or None) and user_agent[:256],
         ip=(ip or None) and ip[:64],
-        expires_at=datetime.now(timezone.utc)
+        expires_at=datetime.now(UTC)
         + timedelta(seconds=ttl_seconds if ttl_seconds is not None else settings.session_ttl_seconds),
     )
     db.add(session)
@@ -87,12 +87,12 @@ async def resolve_session(db: AsyncSession, raw_token: str) -> User | None:
     if session is None or session.revoked_at is not None:
         return None
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # SQLite via aiosqlite can hand back naive datetimes even from a
     # DateTime(timezone=True) column, and comparing naive to aware raises.
     expires_at = session.expires_at
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        expires_at = expires_at.replace(tzinfo=UTC)
     if expires_at <= now:
         return None
 
@@ -102,7 +102,7 @@ async def resolve_session(db: AsyncSession, raw_token: str) -> User | None:
 
     last_seen = session.last_seen_at
     if last_seen is not None and last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=timezone.utc)
+        last_seen = last_seen.replace(tzinfo=UTC)
     if last_seen is None or (now - last_seen).total_seconds() > LAST_SEEN_REFRESH_SECONDS:
         session.last_seen_at = now
         await db.commit()
@@ -120,7 +120,7 @@ async def revoke_session(db: AsyncSession, raw_token: str) -> None:
     ).scalar_one_or_none()
     if session is None or session.revoked_at is not None:
         return
-    session.revoked_at = datetime.now(timezone.utc)
+    session.revoked_at = datetime.now(UTC)
     await db.commit()
 
 

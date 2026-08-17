@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the Dockerfile. The pins also install on 3.14, which is
+          # what a developer running the suite locally is likely to have.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - run: pip install -r requirements-dev.txt
+
+      - run: ruff check .
+
+      - run: python -m pytest -q
+
+      # The suite builds its schema with Base.metadata.create_all, so
+      # migrations are never exercised by it. Run them against a real
+      # Postgres, both directions, or a broken revision only shows up on
+      # someone's machine.
+      - name: alembic upgrade / downgrade / upgrade
+        env:
+          DATABASE_URL: postgresql+asyncpg://llmhell:llmhell@localhost:5432/llmhell
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: llmhell
+          POSTGRES_PASSWORD: llmhell
+          POSTGRES_DB: llmhell
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U llmhell"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run lint
+
+      # `next build` runs the TypeScript check, so this covers both.
+      - run: pnpm run build

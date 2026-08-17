@@ -10,8 +10,9 @@ cannot become a link, because a link only exists where a real hit was found.
 
 import logging
 import re
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 

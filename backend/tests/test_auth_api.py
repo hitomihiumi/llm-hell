@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.core.security import hash_password
 from app.models.user import User
-from tests.conftest import TEST_PASSWORD
 
 
 @pytest.fixture

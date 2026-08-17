@@ -11,7 +11,7 @@ returns 200 - so the fact that it was degraded has to live somewhere, and
 this is it.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import JSON, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -38,11 +38,11 @@ class SearchQuery(Base, TimestampMixin):
     # the more interesting things this demo can show.
     per_source: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
-    answer_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    answer_model: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer_model: Mapped[str | None] = mapped_column(String(256), nullable=True)
     # Only citations that resolved to a hit actually in the prompt. Indices
     # the model invented are counted separately rather than stored.
-    citations: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
+    citations: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     hallucinated_citations: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

@@ -12,8 +12,9 @@ deltas to `ReasoningStreamParser`, and wrapping that in an SDK buys nothing.
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 

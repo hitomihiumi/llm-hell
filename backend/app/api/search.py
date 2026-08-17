@@ -9,7 +9,8 @@ without an answer" is a legitimate and much faster request.
 import json
 import logging
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -158,7 +159,7 @@ async def search(
 
 
 def _sse(event: str, data: Any) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n".encode("utf-8")
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n".encode()
 
 
 @router.post("/search/stream")

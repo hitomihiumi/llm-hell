@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.schemas.search import SearchHit
 from app.services.search.ranking import RECENCY_MAX_BOOST, fuse, recency_factor
 
-NOW = datetime(2026, 8, 17, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 17, tzinfo=UTC)
 
 
 def hit(source: str, n: int, *, timestamp=None) -> SearchHit:

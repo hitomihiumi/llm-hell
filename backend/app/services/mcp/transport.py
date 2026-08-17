@@ -19,9 +19,10 @@ import ast
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
@@ -129,20 +130,23 @@ def _block_to_dict(block: Any) -> dict[str, Any]:
 
 @asynccontextmanager
 async def http_session(url: str, headers: dict[str, str] | None = None) -> AsyncIterator[ClientSession]:
-    async with streamablehttp_client(url, headers=headers or None) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
+    # Note the 3-tuple: the third element is a session-id getter, which
+    # sse_client does not have.
+    async with (
+        streamablehttp_client(url, headers=headers or None) as (read, write, _),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        yield session
 
 
 @asynccontextmanager
 async def sse_session(url: str, headers: dict[str, str] | None = None) -> AsyncIterator[ClientSession]:
     # Note the 2-tuple: sse_client yields (read, write) where
     # streamablehttp_client yields (read, write, get_session_id).
-    async with sse_client(url, headers=headers or None) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
+    async with sse_client(url, headers=headers or None) as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        yield session
 
 
 @asynccontextmanager
@@ -158,10 +162,9 @@ async def stdio_session(
     reason.
     """
     params = StdioServerParameters(command=command, args=args, env=env)
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
+    async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        yield session
 
 
 async def list_tool_names(session: ClientSession, *, timeout: float = 30.0) -> list[str]:
@@ -204,7 +207,7 @@ async def call_tool(
     """
     try:
         result = await asyncio.wait_for(session.call_tool(name, arguments), timeout=timeout)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise McpError(f"{name} timed out after {timeout}s") from exc
     except (McpError, McpToolError):
         raise

@@ -1,7 +1,7 @@
 """Listing, tuning and checking the search sources."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -71,7 +71,7 @@ async def check_source(
     else:
         result = await connector.health()
 
-    checked_at = datetime.now(timezone.utc)
+    checked_at = datetime.now(UTC)
     source.last_checked_at = checked_at
     source.last_check_result = result
     await db.commit()

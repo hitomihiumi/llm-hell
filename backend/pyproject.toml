@@ -1,0 +1,37 @@
+# Ruff configuration only. The project installs from requirements.txt and is
+# not packaged, so there is no [project] table here on purpose.
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [".venv", "alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+]
+ignore = [
+    # `except Exception:` is load-bearing in this codebase, not laziness: a
+    # connector that lets an exception escape breaks the isolation guarantee
+    # that one dead source must not empty the whole result list. Those sites
+    # are individually commented.
+    "BLE001",
+    # Long lines are almost always a comment explaining why something
+    # non-obvious is the way it is, and wrapping those reads worse.
+    "E501",
+    # `= Depends(...)` in a signature default IS the FastAPI idiom - the
+    # framework resolves it per request and there is no alternative spelling.
+    # Flagging it would mean 18 noqa comments on correct code.
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private attributes to set up adapter state without a live
+# server, and shadow builtins in fixtures.
+"tests/*" = ["SLF001", "A002", "B011"]
