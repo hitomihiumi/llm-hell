@@ -123,6 +123,22 @@ A deliberate guard: otherwise anything that can reach the port inherits the
 PAT. We set `STREAMABLE_HTTP_AUTH_TOKEN` — a shared secret between the api
 container and the sidecar, unrelated to the GitLab credential.
 
+### DNS-rebinding protection rejects other containers as 403
+
+The single most misleading error in this whole integration. From the host,
+`http://localhost:3102/mcp` works. From the `api` container,
+`http://gitlab-mcp:3002/mcp` returns:
+
+```
+403 {"error":"Host header is not allowed",
+     "hint":"Set MCP_SERVER_URL or MCP_ALLOWED_HOSTS for non-loopback /mcp hosts."}
+```
+
+The server only trusts a loopback `Host` header by default. A 403 next to a
+configured bearer token reads unmistakably as an auth failure and is nothing
+of the kind - the token was correct the whole time. Fixed by setting
+`MCP_ALLOWED_HOSTS` to include the compose service name.
+
 ### `search_code` does not work on Community Edition
 
 Instance-wide code search is GitLab advanced search: Elasticsearch-backed,

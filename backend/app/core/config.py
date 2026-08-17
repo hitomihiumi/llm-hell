@@ -100,7 +100,9 @@ class Settings(BaseSettings):
     gitlab_default_project_ids: list[str] = []
 
     # --- MCP: Postgres ----------------------------------------------------
-    postgres_mcp_url: str = "http://postgres-mcp:8000/mcp"
+    # SSE, and the path is /sse - the released postgres-mcp has no
+    # streamable-http transport at all. See docs/mcp-spike-findings.md.
+    postgres_mcp_url: str = "http://postgres-mcp:8000/sse"
     # libpq form, NOT +asyncpg. Points at the `kb` database as the read-only
     # `kb_ro` role - never at `database_url`'s database. Anything reachable
     # from here is reachable by generated SQL, and the application's own

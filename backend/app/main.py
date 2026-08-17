@@ -6,11 +6,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
+from app.api.debug import router as debug_router
 from app.api.metrics import router as metrics_router
 from app.api.openai_proxy import close_http_client
 from app.api.openai_proxy import router as openai_proxy_router
+from app.api.records import router as records_router
+from app.api.search import router as search_router
+from app.api.sources import router as sources_router
 from app.core.config import get_settings
 from app.core.seed import run_seed
+from app.services.mcp.registry import close_mcp_registry, get_mcp_registry
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("llmhell")
@@ -21,9 +26,13 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await run_seed()
+    # Builds the connectors and, when google_mcp_mode=stdio, starts the
+    # supervisor task that owns that subprocess.
+    await get_mcp_registry().start()
     try:
         yield
     finally:
+        await close_mcp_registry()
         # The proxy's process-wide httpx client was never closed before,
         # which is harmless at process exit but leaks a connection pool per
         # app instance in tests.
@@ -46,6 +55,10 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(search_router)
+app.include_router(sources_router)
+app.include_router(records_router)
+app.include_router(debug_router)
 app.include_router(openai_proxy_router)
 app.include_router(metrics_router)
 

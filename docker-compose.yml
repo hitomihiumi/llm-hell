@@ -92,6 +92,13 @@ services:
       # can reach the port inherits the token. This is a shared secret
       # between the api container and this one, unrelated to the GitLab PAT.
       STREAMABLE_HTTP_AUTH_TOKEN: ${GITLAB_MCP_AUTH_TOKEN:-}
+      # DNS-rebinding protection. The server only trusts a loopback Host
+      # header by default, so a request from another container - whose Host
+      # is `gitlab-mcp:3002` - is refused with
+      #   403 {"error":"Host header is not allowed"}
+      # which looks exactly like an auth failure and is not one. The
+      # loopback entries keep tools/mcp_probe.py working from the host.
+      MCP_ALLOWED_HOSTS: gitlab-mcp:3002,localhost:3102,127.0.0.1:3102
     extra_hosts:
       # The GitLab being searched runs on the host, outside this compose
       # project, so GITLAB_API_URL points at host.docker.internal.
