@@ -60,6 +60,23 @@ services:
       # Linux too, not just Docker Desktop, since Docker 20.10.
       - "host.docker.internal:host-gateway"
 
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Server-side only. The browser never sees this - it talks to the web
+      # container's own origin, and /api/* is forwarded from here, which is
+      # what keeps cookie auth same-origin with no CORS involved.
+      BACKEND_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      # 3001 on the host because Grafana already owns 3000 and moving it
+      # would break existing bookmarks and the README for no gain.
+      - "3001:3000"
+
   # --- MCP servers ---------------------------------------------------------
   # Each searchable source is a separate MCP server the API talks to as a
   # client. They are exposed on loopback host ports purely so
