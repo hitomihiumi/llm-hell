@@ -136,7 +136,12 @@ async def search(
     if payload.answer:
         started_at = time.monotonic()
         result = await answer_service.synthesize(
-            payload.query, federated.hits, endpoint, settings=settings, http_client=http_client
+            payload.query,
+            federated.hits,
+            endpoint,
+            settings=settings,
+            http_client=http_client,
+            history=payload.history,
         )
         await _record_answer_telemetry(
             db, user=current, endpoint=endpoint, query_id=record.id, result=result, started_at=started_at
@@ -223,7 +228,12 @@ async def search_stream(
         started_at = time.monotonic()
         final: answer_service.AnswerResult | None = None
         async for kind, data in answer_service.synthesize_stream(
-            payload.query, federated.hits, endpoint, settings=settings, http_client=http_client
+            payload.query,
+            federated.hits,
+            endpoint,
+            settings=settings,
+            http_client=http_client,
+            history=payload.history,
         ):
             if kind == "done":
                 final = data

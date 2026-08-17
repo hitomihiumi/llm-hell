@@ -40,6 +40,12 @@ export interface SourceStatus {
   detail: Record<string, unknown>;
 }
 
+/** A prior turn, sent so a follow-up question has context. */
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface Citation {
   n: number;
   hit_id: string;
@@ -68,8 +74,18 @@ export interface User {
 
 /** Events emitted by POST /api/search/stream, in the order they arrive. */
 export type StreamEvent =
-  | { event: "meta"; data: { query_id: string; query: string; answer_model: string | null } }
-  | { event: "hits"; data: { hits: SearchHit[]; source_status: SourceStatus[]; duration_ms: number } }
+  | {
+      event: "meta";
+      data: { query_id: string; query: string; answer_model: string | null };
+    }
+  | {
+      event: "hits";
+      data: {
+        hits: SearchHit[];
+        source_status: SourceStatus[];
+        duration_ms: number;
+      };
+    }
   | { event: "reasoning"; data: { text: string } }
   | { event: "token"; data: { text: string } }
   | { event: "citations"; data: { citations: Citation[] } }

@@ -11,7 +11,8 @@ import type { SourceStatus } from "@/lib/types";
 export function SourceBadge({ status }: { status: SourceStatus }) {
   const [open, setOpen] = useState(false);
   const sql = typeof status.detail?.sql === "string" ? status.detail.sql : null;
-  const mode = typeof status.detail?.mode === "string" ? status.detail.mode : null;
+  const mode =
+    typeof status.detail?.mode === "string" ? status.detail.mode : null;
   const expandable = Boolean(status.error || sql);
 
   const tone = !status.ok
@@ -27,15 +28,20 @@ export function SourceBadge({ status }: { status: SourceStatus }) {
         onClick={() => expandable && setOpen(!open)}
         className={`flex items-center gap-2 ${expandable ? "cursor-pointer" : "cursor-default"}`}
       >
-        <span className="font-medium">{status.display_name || status.source}</span>
+        <span className="font-medium">
+          {status.display_name || status.source}
+        </span>
         {status.ok ? (
           <span>
-            {status.hits} {status.hits === 1 ? "hit" : "hits"} · {status.elapsed_ms}ms
+            {status.hits} {status.hits === 1 ? "hit" : "hits"} ·{" "}
+            {status.elapsed_ms}ms
           </span>
         ) : (
           <span>unavailable</span>
         )}
-        {status.degraded && <span title="some parts of this source failed">partial</span>}
+        {status.degraded && (
+          <span title="some parts of this source failed">partial</span>
+        )}
         {mode === "fallback" && (
           <span
             className="rounded bg-accent-soft px-1 text-accent"
@@ -49,7 +55,9 @@ export function SourceBadge({ status }: { status: SourceStatus }) {
 
       {open && (
         <div className="mt-2 space-y-2 border-t border-border pt-2">
-          {status.error && <p className="font-mono break-words">{status.error}</p>}
+          {status.error && (
+            <p className="font-mono break-words">{status.error}</p>
+          )}
           {sql && (
             <div>
               <p className="mb-1 text-muted">

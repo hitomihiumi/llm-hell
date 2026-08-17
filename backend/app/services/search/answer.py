@@ -89,12 +89,35 @@ def render_hit(index: int, hit: SearchHit, *, snippet_chars: int) -> str:
     return f"{header}\n{snippet}"
 
 
+# How many prior turns to carry, and how much of each. Bounded because the
+# alternative is a conversation that silently squeezes out the search results
+# it is supposed to be answering from - the hits are the point, the history
+# is context.
+MAX_HISTORY_TURNS = 6
+MAX_HISTORY_CHARS = 1500
+
+
+def _history_messages(history: list[Any] | None) -> list[dict[str, str]]:
+    if not history:
+        return []
+    recent = history[-MAX_HISTORY_TURNS:]
+    messages: list[dict[str, str]] = []
+    for turn in recent:
+        role = getattr(turn, "role", None) or (turn.get("role") if isinstance(turn, dict) else None)
+        content = getattr(turn, "content", None) or (turn.get("content") if isinstance(turn, dict) else None)
+        if role not in ("user", "assistant") or not content:
+            continue
+        messages.append({"role": role, "content": str(content)[:MAX_HISTORY_CHARS]})
+    return messages
+
+
 def build_prompt(
     question: str,
     hits: list[SearchHit],
     endpoint: ModelEndpoint,
     *,
     settings: Settings,
+    history: list[Any] | None = None,
 ) -> tuple[list[dict[str, str]], list[SearchHit]]:
     """Pack as many hits as fit, and report which ones made it.
 
@@ -102,8 +125,12 @@ def build_prompt(
     caller needs that list to resolve citations, because `[3]` means "the
     third hit in the prompt", not "the third search result".
     """
+    history_messages = _history_messages(history)
+
     budget = endpoint.ctx_window - settings.answer_max_output_tokens - settings.answer_ctx_reserve_tokens
-    overhead = heuristic_token_count(SYSTEM_PROMPT + question)
+    overhead = heuristic_token_count(
+        SYSTEM_PROMPT + question + "".join(message["content"] for message in history_messages)
+    )
     remaining = max(0, budget - overhead)
 
     included: list[SearchHit] = []
@@ -127,6 +154,9 @@ def build_prompt(
     context = "\n\n".join(blocks) if blocks else "(no results were found)"
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
+        # History sits between the system prompt and the current turn, so the
+        # results are the last thing the model reads.
+        *history_messages,
         {"role": "user", "content": f"Question: {question}\n\nSearch results:\n\n{context}"},
     ]
     return messages, included
@@ -167,12 +197,13 @@ async def synthesize(
     *,
     settings: Settings,
     http_client: httpx.AsyncClient,
+    history: list[Any] | None = None,
 ) -> AnswerResult:
     """Non-streaming answer."""
     if endpoint is None:
         return AnswerResult(error="no model endpoint is registered")
 
-    messages, included = build_prompt(question, hits, endpoint, settings=settings)
+    messages, included = build_prompt(question, hits, endpoint, settings=settings, history=history)
     try:
         completion = await chat.complete(
             endpoint,
@@ -205,6 +236,7 @@ async def synthesize_stream(
     *,
     settings: Settings,
     http_client: httpx.AsyncClient,
+    history: list[Any] | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
     """Yield ("reasoning"|"token"|"done"|"error", payload).
 
@@ -216,7 +248,7 @@ async def synthesize_stream(
         yield "error", {"message": "no model endpoint is registered"}
         return
 
-    messages, included = build_prompt(question, hits, endpoint, settings=settings)
+    messages, included = build_prompt(question, hits, endpoint, settings=settings, history=history)
     parser = ReasoningStreamParser((endpoint.reasoning_profile or {}).get("parse", {}))
 
     text_parts: list[str] = []

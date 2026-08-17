@@ -1,12 +1,11 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
-import { api, ApiError } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import type { User } from "@/lib/types";
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -35,9 +34,12 @@ function LoginForm() {
   return (
     <form onSubmit={onSubmit} className="w-full max-w-sm space-y-5">
       <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Knowledge Base</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Knowledge Base
+        </h1>
         <p className="text-sm text-muted">
-          Search Google Workspace, GitLab and the internal knowledge base at once.
+          Search Google Workspace, GitLab and the internal knowledge base at
+          once.
         </p>
       </div>
 
@@ -48,6 +50,7 @@ function LoginForm() {
             value={username}
             onChange={(changeEvent) => setUsername(changeEvent.target.value)}
             autoComplete="username"
+            // biome-ignore lint/a11y/noAutofocus: the sole input on a single-purpose screen; focusing it is what every user wants first
             autoFocus
             required
             className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
@@ -68,7 +71,10 @@ function LoginForm() {
       </div>
 
       {error && (
-        <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
+        <p
+          role="alert"
+          className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
+        >
           {error}
         </p>
       )}

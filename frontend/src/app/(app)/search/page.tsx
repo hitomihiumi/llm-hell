@@ -1,44 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AnswerPanel } from "@/components/AnswerPanel";
 import { ResultCard } from "@/components/ResultCard";
 import { SourceBadge } from "@/components/SourceBadge";
 import { api } from "@/lib/api";
-import { streamSearch } from "@/lib/sse";
-import type { Citation, SearchHit, Source, SourceStatus } from "@/lib/types";
+import type { Source } from "@/lib/types";
+import { useSearchRun } from "@/lib/useSearch";
 
-interface AnswerState {
-  text: string;
-  reasoning: string;
-  citations: Citation[];
-  model: string | null;
-  stats: { hits_used?: number; hits_dropped?: number } | null;
-}
-
-const EMPTY_ANSWER: AnswerState = {
-  text: "",
-  reasoning: "",
-  citations: [],
-  model: null,
-  stats: null,
-};
-
+/**
+ * The layout that shows the machinery: per-source timings, the generated SQL,
+ * the whole ranked list. `/chat` is the same pipeline in a conversational
+ * shape; both share the SSE handling in useSearchRun.
+ */
 export default function SearchPage() {
   const [sources, setSources] = useState<Source[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [withAnswer, setWithAnswer] = useState(true);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
 
-  const [hits, setHits] = useState<SearchHit[]>([]);
-  const [status, setStatus] = useState<SourceStatus[]>([]);
-  const [answer, setAnswer] = useState<AnswerState>(EMPTY_ANSWER);
-  const [searching, setSearching] = useState(false);
-  const [streaming, setStreaming] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [searched, setSearched] = useState(false);
-
-  const abortRef = useRef<AbortController | null>(null);
+  const { run, start } = useSearchRun();
 
   useEffect(() => {
     api
@@ -47,7 +29,7 @@ export default function SearchPage() {
         setSources(loaded);
         setSelected(new Set(loaded.filter((s) => s.enabled).map((s) => s.key)));
       })
-      .catch(() => setError("Could not load the source list."));
+      .catch(() => setSourcesError("Could not load the source list."));
   }, []);
 
   const toggle = useCallback((key: string) => {
@@ -59,75 +41,20 @@ export default function SearchPage() {
     });
   }, []);
 
-  async function onSubmit(formEvent: React.FormEvent) {
+  function onSubmit(formEvent: React.FormEvent) {
     formEvent.preventDefault();
     if (!query.trim()) return;
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setSearching(true);
-    setStreaming(withAnswer);
-    setError(null);
-    setHits([]);
-    setStatus([]);
-    setAnswer(EMPTY_ANSWER);
-    setSearched(true);
-
-    const body = {
-      query: query.trim(),
-      sources: selected.size && selected.size !== sources.length ? [...selected] : null,
+    start(query.trim(), {
+      sources:
+        selected.size && selected.size !== sources.length
+          ? [...selected]
+          : null,
       answer: withAnswer,
-    };
-
-    try {
-      for await (const event of streamSearch(body, controller.signal)) {
-        switch (event.event) {
-          case "meta":
-            setAnswer((current) => ({ ...current, model: event.data.answer_model }));
-            break;
-          case "hits":
-            // Arrives before the model is called, which is the point: the
-            // results paint while the answer is still being written.
-            setHits(event.data.hits);
-            setStatus(event.data.source_status);
-            setSearching(false);
-            break;
-          case "reasoning":
-            setAnswer((c) => ({ ...c, reasoning: c.reasoning + event.data.text }));
-            break;
-          case "token":
-            setAnswer((c) => ({ ...c, text: c.text + event.data.text }));
-            break;
-          case "citations":
-            setAnswer((c) => ({ ...c, citations: event.data.citations }));
-            break;
-          case "done":
-            setAnswer((c) => ({
-              ...c,
-              stats: {
-                hits_used: event.data.hits_used,
-                hits_dropped: event.data.hits_dropped,
-              },
-            }));
-            setStreaming(false);
-            break;
-          case "error":
-            setError(event.data.message);
-            setStreaming(false);
-            break;
-        }
-      }
-    } catch (caught) {
-      if (!controller.signal.aborted) setError("The search failed.");
-    } finally {
-      setSearching(false);
-      setStreaming(false);
-    }
+    });
   }
 
-  const failing = status.filter((entry) => !entry.ok);
+  const error = sourcesError ?? run?.error ?? null;
+  const failing = run?.status.filter((entry) => !entry.ok) ?? [];
 
   return (
     <div className="space-y-6">
@@ -137,15 +64,16 @@ export default function SearchPage() {
             value={query}
             onChange={(changeEvent) => setQuery(changeEvent.target.value)}
             placeholder="Ask a question, or search for a term…"
+            // biome-ignore lint/a11y/noAutofocus: the sole input on a single-purpose screen; focusing it is what every user wants first
             autoFocus
             className="flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
           />
           <button
             type="submit"
-            disabled={searching || !query.trim()}
+            disabled={run?.searching || !query.trim()}
             className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
           >
-            {searching ? "Searching…" : "Search"}
+            {run?.searching ? "Searching…" : "Search"}
           </button>
         </div>
 
@@ -158,7 +86,11 @@ export default function SearchPage() {
                 type="button"
                 onClick={() => toggle(source.key)}
                 disabled={!source.enabled}
-                title={source.enabled ? undefined : "This source is switched off by an admin"}
+                title={
+                  source.enabled
+                    ? undefined
+                    : "This source is switched off by an admin"
+                }
                 className={`rounded-full border px-3 py-1 text-xs transition-colors disabled:opacity-40 ${
                   on
                     ? "border-accent bg-accent-soft text-accent"
@@ -174,7 +106,9 @@ export default function SearchPage() {
             <input
               type="checkbox"
               checked={withAnswer}
-              onChange={(changeEvent) => setWithAnswer(changeEvent.target.checked)}
+              onChange={(changeEvent) =>
+                setWithAnswer(changeEvent.target.checked)
+              }
             />
             Generate an answer
           </label>
@@ -182,46 +116,53 @@ export default function SearchPage() {
       </form>
 
       {error && (
-        <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
+        <p
+          role="alert"
+          className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
+        >
           {error}
         </p>
       )}
 
-      {status.length > 0 && (
+      {run && run.status.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {status.map((entry) => (
+          {run.status.map((entry) => (
             <SourceBadge key={entry.source} status={entry} />
           ))}
         </div>
       )}
 
-      {withAnswer && (
+      {run && withAnswer && (
         <AnswerPanel
-          text={answer.text}
-          reasoning={answer.reasoning}
-          citations={answer.citations}
-          streaming={streaming}
-          model={answer.model}
-          stats={answer.stats}
+          text={run.answer}
+          reasoning={run.reasoning}
+          citations={run.citations}
+          streaming={run.streaming}
+          model={run.model}
+          stats={
+            run.hitsUsed === undefined
+              ? null
+              : { hits_used: run.hitsUsed, hits_dropped: run.hitsDropped }
+          }
         />
       )}
 
-      {hits.length > 0 ? (
+      {run && run.hits.length > 0 ? (
         <ol className="space-y-3">
-          {hits.map((hit, index) => (
+          {run.hits.map((hit, index) => (
             <ResultCard key={hit.id} hit={hit} index={index + 1} />
           ))}
         </ol>
       ) : (
-        searched &&
-        !searching && (
+        run &&
+        !run.searching && (
           <p className="text-sm text-muted">
             No results.
             {failing.length > 0 && (
               <>
                 {" "}
-                {failing.length} of {status.length} sources could not be reached — the
-                badges above say why.
+                {failing.length} of {run.status.length} sources could not be
+                reached — the badges above say why.
               </>
             )}
           </p>

@@ -60,10 +60,17 @@ export default async function RecordPage({
 
       <dl className="divide-y divide-border rounded-lg border border-border bg-surface">
         {Object.entries(record.fields).map(([name, value]) => (
-          <div key={name} className="grid grid-cols-[10rem_1fr] gap-4 px-4 py-3 text-sm">
+          <div
+            key={name}
+            className="grid grid-cols-[10rem_1fr] gap-4 px-4 py-3 text-sm"
+          >
             <dt className="text-muted">{name}</dt>
             <dd className="whitespace-pre-wrap break-words">
-              {value === null ? <span className="text-muted">—</span> : String(value)}
+              {value === null ? (
+                <span className="text-muted">—</span>
+              ) : (
+                String(value)
+              )}
             </dd>
           </div>
         ))}

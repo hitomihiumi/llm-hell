@@ -27,7 +27,10 @@ export async function* streamSearch(
   if (!response.ok || !response.body) {
     yield {
       event: "error",
-      data: { message: `stream failed with ${response.status}`, stage: "transport" },
+      data: {
+        message: `stream failed with ${response.status}`,
+        stage: "transport",
+      },
     };
     return;
   }

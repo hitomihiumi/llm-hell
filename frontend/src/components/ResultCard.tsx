@@ -34,7 +34,10 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
         <span className="text-xs text-muted tabular-nums">[{index}]</span>
         {hit.url ? (
           internal ? (
-            <Link href={hit.url} className="font-medium text-accent hover:underline">
+            <Link
+              href={hit.url}
+              className="font-medium text-accent hover:underline"
+            >
               {hit.title}
             </Link>
           ) : (
@@ -54,7 +57,9 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
         )}
       </div>
 
-      {hit.snippet && <p className="mt-1.5 text-sm text-muted">{hit.snippet}</p>}
+      {hit.snippet && (
+        <p className="mt-1.5 text-sm text-muted">{hit.snippet}</p>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
         <span className="rounded bg-background px-1.5 py-0.5">

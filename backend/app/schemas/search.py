@@ -70,6 +70,13 @@ class Citation(BaseModel):
     source: str
 
 
+class ChatTurn(BaseModel):
+    """One prior exchange, for follow-up questions in the chat layout."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=8000)
+
+
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     # None means "every enabled source".
@@ -79,6 +86,17 @@ class SearchRequest(BaseModel):
     # LLM at all.
     answer: bool = True
     debug: bool = False
+
+    # Prior turns, oldest first. Sent by the chat layout so a follow-up like
+    # "what about the second one" has something to refer back to.
+    #
+    # NOTE these inform the ANSWER only - the search itself still runs on
+    # `query` alone. Searching for the literal text of a follow-up would be
+    # worse than searching for nothing, and rewriting the query from history
+    # is a bigger piece of work than this demo needs. The practical effect is
+    # that a follow-up re-searches on its own words and the model answers
+    # with the conversation in view.
+    history: list[ChatTurn] | None = Field(default=None, max_length=20)
 
 
 class AnswerOut(BaseModel):

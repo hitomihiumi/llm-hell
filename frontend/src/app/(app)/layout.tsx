@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { LayoutSwitch } from "@/components/LayoutSwitch";
 import { LogoutButton } from "@/components/LogoutButton";
 import type { User } from "@/lib/types";
 
@@ -46,10 +47,8 @@ export default async function AppLayout({
           <Link href="/search" className="text-sm font-semibold tracking-tight">
             Knowledge Base
           </Link>
+          <LayoutSwitch />
           <nav className="flex items-center gap-4 text-sm text-muted">
-            <Link href="/search" className="hover:text-foreground">
-              Search
-            </Link>
             <Link href="/sources" className="hover:text-foreground">
               Sources
             </Link>
@@ -67,7 +66,9 @@ export default async function AppLayout({
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">{children}</main>
+      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+        {children}
+      </main>
     </div>
   );
 }
