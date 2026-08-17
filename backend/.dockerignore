@@ -1,0 +1,24 @@
+# Docker reads <build-context>/.dockerignore, and this image's context is
+# ./backend - a repo-root .dockerignore would be ignored entirely.
+#
+# The Dockerfile does `COPY . .` after installing requirements, so without
+# this file the local development virtualenv (hundreds of MB) is copied into
+# every image build.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tests are not needed at runtime and pull the mock server in with them.
+tests/
+
+# Never bake secrets into an image layer.
+.env
+.env.*
+
+.git/
+*.log
