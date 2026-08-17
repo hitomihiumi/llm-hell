@@ -1,0 +1,19 @@
+{
+  "tool": "get_object_details",
+  "arguments": {
+    "object_type": "table",
+    "schema_name": "public",
+    "object_name": "articles"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "{'basic': {'schema': 'public', 'name': 'articles', 'type': 'table'}, 'columns': [{'column': 'id', 'data_type': 'integer', 'is_nullable': 'NO', 'default': \"nextval('articles_id_seq'::regclass)\"}, {'column': 'title', 'data_type': 'text', 'is_nullable': 'NO', 'default': None}, {'column': 'body', 'data_type': 'text', 'is_nullable': 'NO', 'default': None}, {'column': 'author', 'data_type': 'text', 'is_nullable': 'YES', 'default': None}, {'column': 'category', 'data_type': 'text', 'is_nullable': 'YES', 'default': None}, {'column': 'updated_at', 'data_type': 'timestamp with time zone', 'is_nullable': 'NO', 'default': 'now()'}], 'constraints': [], 'indexes': [{'name': 'articles_pkey', 'definition': 'CREATE UNIQUE INDEX articles_pkey ON public.articles USING btree (id)'}, {'name': 'ix_articles_updated_at', 'definition': 'CREATE INDEX ix_articles_updated_at ON public.articles USING btree (updated_at DESC)'}]}",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": null
+}

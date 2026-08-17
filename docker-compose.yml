@@ -10,6 +10,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pg_data:/var/lib/postgresql/data
+      # Creates the `kb` database, the read-only kb_ro role, and the demo
+      # corpus. These run ONLY when the data volume is empty - on an
+      # existing stack, pipe them through psql by hand (the header of
+      # 01-create-kb.sql has the command).
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -54,6 +59,43 @@ services:
       # on native Linux Docker - it must bind 0.0.0.0, see README). Works on
       # Linux too, not just Docker Desktop, since Docker 20.10.
       - "host.docker.internal:host-gateway"
+
+  # --- MCP servers ---------------------------------------------------------
+  # Each searchable source is a separate MCP server the API talks to as a
+  # client. They are exposed on loopback host ports purely so
+  # `tools/mcp_probe.py` can reach them from outside the compose network;
+  # the API uses the internal service names.
+
+  postgres-mcp:
+    image: crystaldba/postgres-mcp
+    restart: unless-stopped
+    # --access-mode=restricted parses every statement with pglast and
+    # refuses anything that is not read-only. It is the second of three
+    # layers - the first is a validator in text2sql.py, the third and only
+    # non-bypassable one is that kb_ro genuinely cannot write.
+    #
+    # SSE, not streamable-http. The released image (v0.3.0) offers exactly
+    # two transports - `postgres-mcp --help` says "choose from stdio, sse" -
+    # and the flags are --sse-host/--sse-port, not --host/--port. Reports of
+    # a streamable-http option describe an unreleased build. The endpoint
+    # path is /sse.
+    command:
+      - "--transport"
+      - "sse"
+      - "--sse-host"
+      - "0.0.0.0"
+      - "--sse-port"
+      - "8000"
+      - "--access-mode"
+      - "restricted"
+    environment:
+      # libpq form, NOT +asyncpg - this is not SQLAlchemy.
+      DATABASE_URI: ${KB_DATABASE_URI:-postgresql://kb_ro:kb_ro_password@postgres:5432/kb}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8002:8000"
 
   prometheus:
     image: prom/prometheus:v2.55.1

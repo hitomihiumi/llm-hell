@@ -1,0 +1,17 @@
+{
+  "tool": "execute_sql",
+  "arguments": {
+    "sql": "DELETE FROM articles"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "Error: Error validating query: DELETE FROM articles",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": null
+}

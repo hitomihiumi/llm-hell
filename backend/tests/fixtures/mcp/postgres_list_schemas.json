@@ -1,0 +1,15 @@
+{
+  "tool": "list_schemas",
+  "arguments": {},
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "[{'schema_name': 'information_schema', 'schema_owner': 'llmhell', 'schema_type': 'System Information Schema'}, {'schema_name': 'pg_catalog', 'schema_owner': 'llmhell', 'schema_type': 'System Schema'}, {'schema_name': 'public', 'schema_owner': 'pg_database_owner', 'schema_type': 'User Schema'}]",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": null
+}

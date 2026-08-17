@@ -1,24 +1,40 @@
-fastapi==0.115.6
 uvicorn[standard]==0.34.0
-# 2.0.36 crashes at import on CPython 3.14: its `Optional[...]` annotation
-# de-stringifier calls Union.__getitem__ with a tuple, which 3.14's typing
-# rejects, so every declarative model fails to map.
-sqlalchemy==2.0.52
-alembic==1.19.1
 argon2-cffi==23.1.0
 httpx==0.28.1
 openai==1.58.1
 prometheus-client==0.21.1
 
-# These three ship compiled extensions, and the previously pinned versions
-# predate CPython 3.14 - there are no wheels for it, so `pip install` tried
-# to build pydantic-core from Rust source and failed. The image is 3.12, but
-# a developer running the suite outside Docker is on whatever their machine
+# fastapi 0.115.6 pinned starlette <0.42, and the MCP SDK requires
+# starlette 1.x - the two could not coexist. Upgrading fastapi is the
+# resolution rather than pinning the SDK back, because starlette 1.x is
+# where both projects are going. This also removed `@app.on_event`, which
+# app/main.py had already stopped using in favour of a lifespan.
+fastapi==0.141.1
+
+# The MCP client. 1.x, deliberately NOT 2.0: 2.0 replaces httpx with
+# `httpx2`, and this service already runs a shared httpx.AsyncClient for the
+# proxy and injects httpx.ASGITransport in every test. Taking 2.0 would mean
+# two HTTP libraries with two exception hierarchies inside the code whose
+# whole job is telling one source's failure apart from another's. 2.0 also
+# drops create_connected_server_and_client_session, the in-process test
+# transport used by tests/test_mcp_transport.py.
+#
+# Every import of this package lives in app/services/mcp/transport.py, so
+# moving to 2.0 later is that one file plus this pin.
+mcp==1.29.0
+
+# These ship compiled extensions, and the previously pinned versions predate
+# CPython 3.14 - there are no wheels for it, so `pip install` tried to build
+# pydantic-core from Rust source and failed. The image is 3.12, but a
+# developer running the suite outside Docker is on whatever their machine
 # has, and a requirements file that only installs on one interpreter is a
 # trap. These versions all publish cp314 wheels.
 #
-# pydantic also has a floor of its own: the MCP SDK requires >=2.11.
+# SQLAlchemy has a second reason: 2.0.36 crashes at import on 3.14, because
+# its Optional[...] de-stringifier calls Union.__getitem__ with a tuple.
 greenlet==3.5.5
 asyncpg==0.31.0
 pydantic==2.13.4
 pydantic-settings==2.7.0
+sqlalchemy==2.0.52
+alembic==1.19.1
