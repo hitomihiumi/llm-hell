@@ -141,13 +141,16 @@ async def cmd_list(session: ClientSession, args: argparse.Namespace) -> dict[str
 
 
 async def cmd_call(session: ClientSession, args: argparse.Namespace) -> dict[str, Any]:
-    try:
-        arguments = json.loads(args.arguments)
-    except json.JSONDecodeError as exc:
-        print(f"arguments must be a JSON object: {exc}", file=sys.stderr)
-        raise SystemExit(2)
+    # Already validated in main(), before the session was opened - raising
+    # from in here would surface as an unreadable anyio ExceptionGroup
+    # instead of a one-line error.
+    arguments = args.parsed_arguments
 
-    result = await session.call_tool(args.tool, arguments)
+    try:
+        result = await session.call_tool(args.tool, arguments)
+    except Exception as exc:  # noqa: BLE001 - a probe reports, it does not crash
+        print(f"call failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return {"tool": args.tool, "arguments": arguments, "call_failed": f"{type(exc).__name__}: {exc}"}
 
     blocks = [_block_to_dict(block) for block in (result.content or [])]
     text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
@@ -222,6 +225,20 @@ def main() -> None:
     # cmd_list/cmd_call can share one Namespace.
     if not hasattr(args, "schemas"):
         args.schemas = False
+
+    # Parse tool arguments here, not after connecting: a JSON typo should
+    # print one line, not a nested anyio traceback from inside the session's
+    # task group.
+    if args.command == "call":
+        try:
+            args.parsed_arguments = json.loads(args.arguments)
+        except json.JSONDecodeError as exc:
+            print(f"arguments must be a JSON object: {exc}\ngot: {args.arguments}", file=sys.stderr)
+            raise SystemExit(2)
+        if not isinstance(args.parsed_arguments, dict):
+            print(f"arguments must be a JSON *object*, got {type(args.parsed_arguments).__name__}", file=sys.stderr)
+            raise SystemExit(2)
+
     asyncio.run(main_async(args))
 
 

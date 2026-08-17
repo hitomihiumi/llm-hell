@@ -1,0 +1,49 @@
+{
+  "tool": "search_project_code",
+  "arguments": {
+    "project_id": "1",
+    "search": "rank"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "[{\"basename\":\"deploy/run_vllm\",\"data\":\"#\\n# Raise the open-file limit FIRST. The data-parallel coordinator opens a\\n# socket per rank, and at the default 1024 descriptors it dies before it can\\n# report anything - the only symptom is a ZMQ timeout during startup.\\nset -euo pipefail\\n\",\"path\":\"deploy/run_vllm.sh\",\"filename\":\"deploy/run_vllm.sh\",\"id\":null,\"ref\":\"main\",\"startline\":3,\"project_id\":\"1\"},{\"basename\":\"search/federation\",\"data\":\"\\\"\\\"\\\"Federated search across the configured sources.\\n\\nResults are ranked with reciprocal rank fusion rather than by each source's\\nown relevance score, because those scores are not comparable and two of the\\nthree sources do not return one at all.\\n\",\"path\":\"search/federation.py\",\"filename\":\"search/federation.py\",\"id\":null,\"ref\":\"main\",\"startline\":1,\"project_id\":\"1\"},{\"basename\":\"search/federation\",\"data\":\"\\ndef fuse(hits, weight=1.0):\\n    \\\"\\\"\\\"score = weight / (RRF_K + rank_within_source)\\\"\\\"\\\"\\n    return [(hit, weight / (RRF_K + rank)) for rank, hit in enumerate(hits)]\\n\",\"path\":\"search/federation.py\",\"filename\":\"search/federation.py\",\"id\":null,\"ref\":\"main\",\"startline\":20,\"project_id\":\"1\"}]",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": [
+    {
+      "basename": "deploy/run_vllm",
+      "data": "#\n# Raise the open-file limit FIRST. The data-parallel coordinator opens a\n# socket per rank, and at the default 1024 descriptors it dies before it can\n# report anything - the only symptom is a ZMQ timeout during startup.\nset -euo pipefail\n",
+      "path": "deploy/run_vllm.sh",
+      "filename": "deploy/run_vllm.sh",
+      "id": null,
+      "ref": "main",
+      "startline": 3,
+      "project_id": "1"
+    },
+    {
+      "basename": "search/federation",
+      "data": "\"\"\"Federated search across the configured sources.\n\nResults are ranked with reciprocal rank fusion rather than by each source's\nown relevance score, because those scores are not comparable and two of the\nthree sources do not return one at all.\n",
+      "path": "search/federation.py",
+      "filename": "search/federation.py",
+      "id": null,
+      "ref": "main",
+      "startline": 1,
+      "project_id": "1"
+    },
+    {
+      "basename": "search/federation",
+      "data": "\ndef fuse(hits, weight=1.0):\n    \"\"\"score = weight / (RRF_K + rank_within_source)\"\"\"\n    return [(hit, weight / (RRF_K + rank)) for rank, hit in enumerate(hits)]\n",
+      "path": "search/federation.py",
+      "filename": "search/federation.py",
+      "id": null,
+      "ref": "main",
+      "startline": 20,
+      "project_id": "1"
+    }
+  ]
+}

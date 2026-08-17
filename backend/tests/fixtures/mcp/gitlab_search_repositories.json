@@ -1,0 +1,70 @@
+{
+  "tool": "search_repositories",
+  "arguments": {
+    "search": "test"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "{\"count\":1,\"total_pages\":1,\"current_page\":1,\"items\":[{\"id\":\"1\",\"name\":\"test\",\"path_with_namespace\":\"test/test\",\"visibility\":\"private\",\"web_url\":\"http://aea717aec055/test/test\",\"description\":null,\"ssh_url_to_repo\":\"git@aea717aec055:test/test.git\",\"http_url_to_repo\":\"http://aea717aec055/test/test.git\",\"created_at\":\"2026-08-17T11:30:57.441Z\",\"last_activity_at\":\"2026-08-17T11:30:57.389Z\",\"default_branch\":\"main\",\"namespace\":{\"id\":\"2\",\"name\":\"test\",\"path\":\"test\",\"kind\":\"group\",\"full_path\":\"test\",\"avatar_url\":null,\"web_url\":\"http://aea717aec055/groups/test\"},\"readme_url\":\"http://aea717aec055/test/test/-/blob/main/README.md\",\"topics\":[],\"tag_list\":[],\"open_issues_count\":0,\"archived\":false,\"forks_count\":0,\"star_count\":0,\"permissions\":{\"project_access\":null,\"group_access\":{\"access_level\":50,\"notification_level\":3}},\"container_registry_enabled\":true,\"container_registry_access_level\":\"enabled\",\"issues_enabled\":true,\"merge_requests_enabled\":true,\"wiki_enabled\":true,\"jobs_enabled\":true,\"snippets_enabled\":true,\"can_create_merge_request_in\":true,\"resolve_outdated_diff_discussions\":false,\"shared_runners_enabled\":true,\"shared_with_groups\":[]}]}",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": {
+    "count": 1,
+    "total_pages": 1,
+    "current_page": 1,
+    "items": [
+      {
+        "id": "1",
+        "name": "test",
+        "path_with_namespace": "test/test",
+        "visibility": "private",
+        "web_url": "http://aea717aec055/test/test",
+        "description": null,
+        "ssh_url_to_repo": "git@aea717aec055:test/test.git",
+        "http_url_to_repo": "http://aea717aec055/test/test.git",
+        "created_at": "2026-08-17T11:30:57.441Z",
+        "last_activity_at": "2026-08-17T11:30:57.389Z",
+        "default_branch": "main",
+        "namespace": {
+          "id": "2",
+          "name": "test",
+          "path": "test",
+          "kind": "group",
+          "full_path": "test",
+          "avatar_url": null,
+          "web_url": "http://aea717aec055/groups/test"
+        },
+        "readme_url": "http://aea717aec055/test/test/-/blob/main/README.md",
+        "topics": [],
+        "tag_list": [],
+        "open_issues_count": 0,
+        "archived": false,
+        "forks_count": 0,
+        "star_count": 0,
+        "permissions": {
+          "project_access": null,
+          "group_access": {
+            "access_level": 50,
+            "notification_level": 3
+          }
+        },
+        "container_registry_enabled": true,
+        "container_registry_access_level": "enabled",
+        "issues_enabled": true,
+        "merge_requests_enabled": true,
+        "wiki_enabled": true,
+        "jobs_enabled": true,
+        "snippets_enabled": true,
+        "can_create_merge_request_in": true,
+        "resolve_outdated_diff_discussions": false,
+        "shared_runners_enabled": true,
+        "shared_with_groups": []
+      }
+    ]
+  }
+}

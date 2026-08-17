@@ -1,0 +1,7 @@
+{
+  "tool": "search_code",
+  "arguments": {
+    "search": "rank"
+  },
+  "call_failed": "McpError: GitLab API error: 400 Bad Request\n{\"error\":\"scope does not have a valid value\"}"
+}

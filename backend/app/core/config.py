@@ -84,6 +84,11 @@ class Settings(BaseSettings):
 
     # --- MCP: GitLab ------------------------------------------------------
     gitlab_mcp_url: str = "http://gitlab-mcp:3002/mcp"
+    # Shared secret gating the gitlab-mcp endpoint itself, NOT a GitLab
+    # credential. The server refuses to serve streamable HTTP with a
+    # server-side PAT unless the endpoint is gated, on the reasoning that
+    # anything able to reach the port would otherwise inherit the token.
+    gitlab_mcp_auth_token: str = ""
     gitlab_personal_access_token: str = ""
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     # Web base for synthesising blob permalinks, since the API url is not it.

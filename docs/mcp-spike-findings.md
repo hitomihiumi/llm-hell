@@ -93,23 +93,88 @@ calling `execute_sql`.
 
 ---
 
-## GitLab — NOT YET PROBED (blocked on a personal access token)
-
-Two things to settle the moment a PAT is available:
-
-1. **Does `search_code` exist on the target instance at all?**
-   Instance-wide code search is GitLab *advanced search* — Elasticsearch-backed,
-   and Premium/Ultimate on self-managed. On a Free/CE instance the tool is
-   either absent or returns empty. Fallback is `search_project_code` scoped to
-   configured project ids, or `search_repositories` + `list_commits`.
-2. **Do results carry `web_url`?** The underlying REST objects do, but these
-   servers are thin passthroughs and the README documents no response
-   schema. If code hits lack it, the permalink has to be synthesised from
-   `project_path` + `ref` + `path` + `startline`.
+## GitLab (`zereight050/gitlab-mcp`) — probed against GitLab CE 19.2.2
 
 Note on the source: `harshmaur/gitlab-mcp` (the link this project started
 from) is a 1-star fork last pushed 2025-06-05 whose own README redirects to
-upstream, and it lacks `search_code` entirely. Use `zereight/gitlab-mcp`.
+upstream. Use `zereight/gitlab-mcp`.
+
+### The code-search tools are OFF by default
+
+A stock container exposes **63 tools and none of them searches code**.
+`discover_tools` explains why:
+
+```json
+{"id": "search", "toolCount": 3, "active": false, "isDefault": false}
+```
+
+Setting `GITLAB_TOOLSETS=search,repositories,projects` enables them and cuts
+the surface to 17 tools, dropping the merge-request and issue tools this
+project would only list and discard.
+
+### Streamable HTTP refuses to start with a server-side token
+
+```
+STREAMABLE_HTTP=true with server-side GitLab credentials requires
+REMOTE_AUTHORIZATION=true, GITLAB_MCP_OAUTH=true, or STREAMABLE_HTTP_AUTH_TOKEN
+```
+
+A deliberate guard: otherwise anything that can reach the port inherits the
+PAT. We set `STREAMABLE_HTTP_AUTH_TOKEN` — a shared secret between the api
+container and the sidecar, unrelated to the GitLab credential.
+
+### `search_code` does not work on Community Edition
+
+Instance-wide code search is GitLab advanced search: Elasticsearch-backed,
+Premium/Ultimate only. On CE it fails with
+
+```
+GitLab API error: 400 {"error":"scope does not have a valid value"}
+```
+
+Confirmed with two different tokens, including one with every scope except
+GitLab Duo — so this is an edition limitation, not a permissions problem.
+**`search_project_code` works fine on CE**, so the connector searches
+project by project and treats instance-wide search as an optimisation to try
+once and then remember has failed.
+
+### Code hits carry no `web_url`
+
+A `search_project_code` result is:
+
+```json
+{"basename": "search/federation", "data": "...matched lines...",
+ "path": "search/federation.py", "filename": "search/federation.py",
+ "id": null, "ref": "main", "startline": 20, "project_id": "1"}
+```
+
+There is no link, so the permalink is synthesised as
+`{web}/{path_with_namespace}/-/blob/{ref}/{path}#L{startline}` — which needs
+a project-id-to-path map that only the project tools provide.
+
+### `web_url` points at the instance's own hostname
+
+Where a URL *is* returned, GitLab builds it from its configured
+`external_url`. For a containerised instance that is the container hostname
+(`http://aea717aec055/test/test`) — correct for the server, dead in a
+browser. Every URL is rewritten onto `GITLAB_WEB_URL`.
+
+### Shapes differ between tools, and ids change type
+
+`search_project_code` returns a **bare JSON array**; `search_repositories`
+returns **`{"count": n, "total_pages": n, "items": [...]}`**. `get_project`
+returns `id` as an **int**, `search_repositories` as a **string**. Unlike
+postgres-mcp, this server returns real JSON rather than a Python repr.
+
+### The SDK raises its own error class
+
+`session.call_tool` raises `mcp.shared.exceptions.McpError` - a *different*
+class from the one defined in `transport.py`. Letting it escape means
+callers catching the local error miss it, and it then crosses an anyio task
+group and arrives as `unhandled errors in a TaskGroup (1 sub-exception)`
+with no indication of the cause. `transport.call_tool` now wraps anything
+the SDK raises, and `summarise_exception` flattens ExceptionGroups so the
+per-source error shown in the UI names the real failure.
 
 ---
 
