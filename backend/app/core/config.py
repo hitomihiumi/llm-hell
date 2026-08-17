@@ -123,9 +123,15 @@ class Settings(BaseSettings):
     google_mcp_args: list[str] = ["-y", "@aaronsb/google-workspace-mcp"]
     google_client_id: str = ""
     google_client_secret: str = ""
-    # The account the fat `manage_*` tools route on. The server is
-    # multi-account; this picks which one the demo searches.
+    # The account the fat `manage_*` tools route on. NOT optional - every
+    # Google tool takes `email` as a required argument, because the server is
+    # multi-account and has no notion of a default one.
     google_account_email: str = ""
+    # Drive search returns metadata only, with no body text, so an answer
+    # built on it would have titles to cite and nothing to quote. This many
+    # top hits get a second call to fetch their content. Each one is a round
+    # trip, hence the small default; 0 disables enrichment entirely.
+    google_enrich_hits: int = 3
 
 
 @lru_cache

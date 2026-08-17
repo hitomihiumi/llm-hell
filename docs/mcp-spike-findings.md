@@ -194,23 +194,120 @@ per-source error shown in the UI names the real failure.
 
 ---
 
-## Google Workspace — NOT YET PROBED (blocked on OAuth credentials)
 
-Known from the source before probing:
+## Google Workspace (`@aaronsb/google-workspace-mcp` v4.2.1) — probed
 
-- **stdio only.** `StdioServerTransport`, no HTTP/SSE option, no port. To
-  run it as a sidecar it has to be bridged to HTTP; otherwise it must be a
-  child process of the API.
-- **Needs the `gws` binary.** The npm package declares three dependencies
-  and none of them is a Google API client — it shells out to Google's
-  Workspace CLI, a Rust binary that must be on `$PATH`. Unverified whether
-  a Linux release is downloadable.
-- **First use requires an interactive browser flow**
-  (`manage_accounts {operation: "authenticate"}`), so credentials have to be
-  produced on a workstation and mounted in.
-- Tools are fat operation-dispatchers: search is
-  `manage_drive {operation: "search"}` and `manage_email {operation: "search"}`,
-  not dedicated tools.
+Probed against a real account with a Desktop OAuth client. **Almost
+everything believed about this server before probing was wrong**, including
+things stated confidently in earlier versions of this file.
 
-To settle when credentials exist: the response shape of both searches, and
-whether Drive hits carry `webViewLink`.
+### It does NOT use `gws`, Google's Workspace CLI
+
+The widely-repeated claim — that the package shells out to that Rust binary,
+which is indeed not one of its three dependencies — is false for v4.2.1.
+Verified by reading the installed package:
+
+- `build/google/client.js` calls Google's REST APIs directly with `fetch` and
+  `Authorization: Bearer <token>`.
+- `build/accounts/` implements its own OAuth and refreshes its own tokens
+  against `oauth2.googleapis.com/token`.
+- The only `gws` strings anywhere are a `gws://` URI scheme for MCP resources
+  and temp-file name prefixes.
+- The only child process it ever spawns is a browser, during consent.
+
+So `@googleworkspace/cli` should not be installed at all. This repo's
+Dockerfile was downloading a Rust binary for nothing.
+
+### It answers in Markdown, not JSON
+
+The big one. `structuredContent` is **always null**, and the text block is a
+human-readable report:
+
+```
+## Files (1)
+
+1AbCdEfG…9abc | TEST | g/document | Aug 17 | 2.2 KB
+
+---
+**Next steps:**
+- Get file details: `manage_drive` — `{"operation":"get",…}`
+
+---
+**Session context** (demo@example.com):
+- No new unread emails since session start (2 unread, 2 today)
+```
+
+None of that parses as JSON or as a Python literal, so the payload ladder
+yields nothing — an adapter expecting JSON dicts gets zero hits from a
+perfectly successful search. The connector parses the pipe-delimited table
+itself and stops at the first `---`, because the "Next steps" boilerplate
+contains ids, emails and pipes of its own and would otherwise be read as
+results.
+
+Gmail is the same shape with different columns:
+`<messageId> | <from, truncated with …> | <subject> | <date>`.
+An empty result is prose: `No messages found for query: "test".`
+
+### Search returns metadata only — no content, and no link
+
+A Drive row carries an id, a name, an abbreviated type, a date and a size.
+No snippet, no URL.
+
+- **Links are synthesised per type**, because a Google Doc opened at the
+  generic `/file/d/<id>/view` viewer behaves badly: `g/document` →
+  `docs.google.com/document/d/<id>/edit`, `g/spreadsheet` → the Sheets
+  editor, and so on.
+- **Content needs a second call.** Without it an answer has titles to cite
+  and nothing to quote, which defeats the purpose of citations. The connector
+  enriches the top `GOOGLE_ENRICH_HITS` (default 3) hits via
+  `manage_docs get` / `manage_email read`.
+
+Those two responses have **different** shapes, which is why the body
+extractor cannot simply split on `---`:
+
+```
+manage_docs get    ## title, **Key:** value lines, ---, BODY, ---, boilerplate
+manage_email read  ## title, **Key:** value lines, BODY, then boilerplate
+```
+
+### Dates omit the year
+
+`Aug 17`, with no year, for recent items. Assuming the current year
+unconditionally would date a December item into the future and hand it an
+undeserved recency boost, so the parser rolls back a year when the result
+would be in the future.
+
+### Every tool requires `email`; unknown keys are tolerated anyway
+
+`email` is in `required` on every tool — the server is multi-account and has
+no default, so there is nothing to fall back to. Both schemas also declare
+`additionalProperties: false`, but the runtime **ignores** unknown keys: a
+deliberately-sent `pageSize` was accepted, not rejected. Do not rely on the
+server to catch a misspelled argument.
+
+Drive's `query` is **Drive's query language**, not free text — its own
+description says `name contains 'budget'`. A bare phrase is a syntax error,
+so the connector wraps input as `fullText contains '…'`. Gmail's query does
+accept bare terms.
+
+### 11 tools, not 12, and no `manage_contacts`
+
+`manage_accounts`, `manage_workspace`, `manage_scratchpad`,
+`queue_operations`, `manage_calendar`, `manage_docs`, `manage_drive`,
+`manage_email`, `manage_meet`, `manage_sheets`, `manage_tasks`.
+
+### The stdio→HTTP bridge must be stateful
+
+`supergateway` defaults to stateless and respawns the node server per
+request, costing ~5s per Drive search — and since the fan-out waits for its
+slowest source, that was ~5s on *every* search in the application. With
+`--stateful`, a Drive search plus enrichment is ~3.5s and a plain search
+~1.2s, which is Google's own API latency.
+
+### Consent grants read/write
+
+`authenticate` takes no scope argument and requests the server's full set:
+`drive`, `gmail.modify`, calendar, sheets, docs, tasks, slides, meet. There
+are no read-only variants in its scope map. `manage_accounts` with
+`operation: "scopes"` and `services: "drive,gmail"` narrows it afterwards, at
+the cost of a second consent.

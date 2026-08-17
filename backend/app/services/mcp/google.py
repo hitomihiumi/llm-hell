@@ -1,6 +1,6 @@
 """Searching Google Workspace through aaronsb/google-workspace-mcp.
 
-Three things make this the awkward source of the three:
+What makes this the awkward source of the three:
 
   * **It is stdio-only.** No HTTP transport exists, so it cannot simply be a
     sidecar the API dials. It is either a child process of the API, or it is
@@ -8,29 +8,47 @@ Three things make this the awkward source of the three:
     streamable HTTP like the others. `GOOGLE_MCP_MODE` picks which, and this
     connector handles both by routing every call through `_call`.
 
-  * **It shells out to `gws`**, Google's Workspace CLI, which is a Rust
-    binary published as `@googleworkspace/cli` on npm and NOT a dependency
-    of the MCP package. The image installs both.
-
   * **First use needs an interactive browser consent**, which cannot happen
     in a container. Tokens are produced on a workstation and mounted in; see
     docs/google-workspace-setup.md.
 
+Four things about its contract, all confirmed against a running v4.2.1 rather
+than assumed - every one of them was wrong in an earlier version of this file:
+
+  1. **It answers in Markdown, not JSON.** `structuredContent` is always
+     null and the text block is a human-readable report: a `## Files (N)`
+     heading, pipe-delimited rows, then "Next steps" and "Session context"
+     prose. Nothing here can be parsed as JSON or a Python literal, so the
+     usual payload ladder yields nothing and this module parses the table
+     itself. See `parse_markdown_rows`.
+  2. **`email` is REQUIRED** on every tool. The server is multi-account and
+     has no default, so there is nothing to fall back to when it is unset.
+  3. **Drive's `query` is Drive's query language**, not free text: a bare
+     phrase is a syntax error, not a search. See `drive_query`.
+  4. **Search returns metadata only - no content and no link.** A citation
+     needs something to quote, so the top few hits are enriched with a second
+     call that fetches the document text. See `_enrich`.
+
+The advertised schemas say `additionalProperties: false`, but the runtime
+ignores unknown keys - a stray `pageSize` was accepted, not rejected. We send
+only documented arguments anyway; do not rely on the server to catch a typo.
+
+Note it does NOT shell out to `gws`, Google's Workspace CLI, contrary to most
+writing about this package: it calls Google's REST APIs directly with its own
+tokens. See the header of docker/google-mcp/Dockerfile.
+
 The tools are fat operation-dispatchers rather than one tool per action, so
 searching Drive is `manage_drive {operation: "search"}`.
 
-RESPONSE SHAPES HERE ARE UNVERIFIED. Unlike the GitLab and Postgres
-connectors, this one could not be probed against a live server - that needs
-OAuth credentials this repository does not have. Every field name below is
-taken from the Drive and Gmail REST APIs the server wraps, and the extraction
-is written as a ladder of alternatives for that reason. Run
-`tools/mcp_probe.py --url http://localhost:3103/mcp call manage_drive
-'{"operation":"search","query":"x"}'` once credentials exist, save the result
-into tests/fixtures/mcp/, and tighten this against it.
+A row that cannot be mapped is dropped rather than raising, and when a
+response matches no known shape at all `search()` reports that in
+`detail["warning"]` instead of quietly showing an empty list.
 """
 
 import logging
+import re
 import time
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.core.config import Settings
@@ -50,11 +68,228 @@ logger = logging.getLogger("llmhell.mcp.google")
 
 SNIPPET_CHARS = 400
 
+# Both tools cap this at 50 and default to 10.
+MAX_RESULTS = 50
+
 # Which fat tool serves which source, and what a hit from it is.
 _SURFACES: dict[str, dict[str, Any]] = {
     SOURCE_GOOGLE_DRIVE: {"tool": "manage_drive", "kind": "document"},
     SOURCE_GOOGLE_MAIL: {"tool": "manage_email", "kind": "email"},
 }
+
+
+def drive_query(text: str) -> str:
+    """Turn a user's words into a Drive API query.
+
+    `manage_drive`'s `query` is not free text - it is Drive's own query
+    language, as its own description says: `name contains 'budget'`,
+    `mimeType='application/pdf'`. Passing a bare phrase is a syntax error, not
+    a search.
+
+    `fullText contains` searches name, content and metadata, which is the
+    closest thing to what someone typing into a search box means. Drive's
+    grammar delimits terms with single quotes and escapes with a backslash.
+    """
+    escaped = text.replace("\\", "\\\\").replace("'", "\\'")
+    return f"fullText contains '{escaped}'"
+
+
+def gmail_query(text: str) -> str:
+    """Gmail's query language does accept bare terms, so this is nearly a
+    passthrough - but a stray double quote would unbalance the expression."""
+    return text.replace('"', " ").strip()
+
+
+# --- Markdown report parsing -----------------------------------------------
+#
+# The real response shape. A Drive search looks like:
+#
+#     ## Files (1)
+#
+#     1AbCdEfG…9abc | TEST | g/document | Aug 17 | 2.2 KB
+#
+#     ---
+#     **Next steps:**
+#     - Get file details: …
+#
+# and a Gmail search the same but `## Messages (N)` with different columns.
+
+_HEADING = re.compile(r"^##\s+(Files|Messages)\s*\((\d+)\)\s*$", re.MULTILINE)
+# "Aug 17" (this year, implicitly) or "Aug 17, 2024" for older items.
+_SHORT_DATE = re.compile(r"^([A-Z][a-z]{2})\s+(\d{1,2})(?:,\s*(\d{4}))?$")
+
+_MONTHS = {
+    name: number
+    for number, name in enumerate(
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1
+    )
+}
+
+# Drive abbreviates the mime type. Each Google type has its own edit URL;
+# a generic file has none and needs the Drive viewer instead.
+_DRIVE_URL_BY_TYPE = {
+    "g/document": "https://docs.google.com/document/d/{id}/edit",
+    "g/spreadsheet": "https://docs.google.com/spreadsheets/d/{id}/edit",
+    "g/presentation": "https://docs.google.com/presentation/d/{id}/edit",
+    "g/form": "https://docs.google.com/forms/d/{id}/edit",
+    "g/drawing": "https://docs.google.com/drawings/d/{id}/edit",
+    "g/folder": "https://drive.google.com/drive/folders/{id}",
+}
+_DRIVE_URL_DEFAULT = "https://drive.google.com/file/d/{id}/view"
+
+
+def parse_markdown_rows(text: str) -> list[list[str]]:
+    """Pipe-delimited rows from a `## Files (N)` / `## Messages (N)` report.
+
+    Stops at the first `---`, which is where the server's "Next steps" and
+    "Session context" prose begins - that boilerplate mentions ids and emails
+    of its own and would otherwise be parsed as results.
+    """
+    match = _HEADING.search(text or "")
+    if not match:
+        return []
+
+    rows: list[list[str]] = []
+    for line in text[match.end() :].splitlines():
+        stripped = line.strip()
+        if stripped.startswith("---"):
+            break
+        if not stripped or "|" not in stripped:
+            continue
+        rows.append([cell.strip() for cell in stripped.split("|")])
+    return rows
+
+
+def parse_short_date(value: str) -> datetime | None:
+    """"Aug 17" or "Aug 17, 2024" to a datetime, or None.
+
+    The server omits the year for recent items, the way a mail client does,
+    which means it is implicitly "the most recent Aug 17 that has already
+    happened". Guessing the current year unconditionally would date a
+    December item a year into the future and hand it a recency boost it has
+    not earned.
+    """
+    match = _SHORT_DATE.match((value or "").strip())
+    if not match:
+        return None
+    month = _MONTHS.get(match.group(1))
+    if not month:
+        return None
+
+    day, year = int(match.group(2)), match.group(3)
+    now = datetime.now(UTC)
+    try:
+        if year:
+            return datetime(int(year), month, day, tzinfo=UTC)
+        candidate = datetime(now.year, month, day, tzinfo=UTC)
+        # Allow a day of slack for timezone skew before assuming last year.
+        if candidate > now + timedelta(days=1):
+            candidate = datetime(now.year - 1, month, day, tzinfo=UTC)
+        return candidate
+    except ValueError:
+        return None
+
+
+def drive_url(file_id: str, type_hint: str) -> str:
+    template = _DRIVE_URL_BY_TYPE.get((type_hint or "").strip().lower(), _DRIVE_URL_DEFAULT)
+    return template.format(id=file_id)
+
+
+def drive_hits_from_markdown(text: str, *, source_key: str, debug: bool) -> list[SearchHit]:
+    """`<fileId> | <name> | <type> | <date> | <size>`"""
+    hits: list[SearchHit] = []
+    for row in parse_markdown_rows(text):
+        if len(row) < 2:
+            continue
+        file_id, name = row[0], row[1]
+        if not file_id or not name:
+            continue
+        type_hint = row[2] if len(row) > 2 else ""
+        hits.append(
+            SearchHit(
+                id=f"{source_key}:{file_id}",
+                source=source_key,
+                kind="document",
+                external_id=file_id,
+                title=name,
+                # Search carries no content; _enrich fills this in for the
+                # top hits.
+                snippet="",
+                url=drive_url(file_id, type_hint),
+                timestamp=parse_short_date(row[3]) if len(row) > 3 else None,
+                rank_in_source=len(hits),
+                raw={"row": row} if debug else None,
+            )
+        )
+    return hits
+
+
+def email_hits_from_markdown(text: str, *, source_key: str, debug: bool) -> list[SearchHit]:
+    """`<messageId> | <from> | <subject> | <date>`
+
+    Note the sender is truncated with a "…" by the server when long, so it is
+    a display value and not a usable address.
+    """
+    hits: list[SearchHit] = []
+    for row in parse_markdown_rows(text):
+        if len(row) < 3:
+            continue
+        message_id, sender, subject = row[0], row[1], row[2]
+        if not message_id or not subject:
+            continue
+        hits.append(
+            SearchHit(
+                id=f"{source_key}:{message_id}",
+                source=source_key,
+                kind="email",
+                external_id=message_id,
+                title=subject,
+                snippet="",
+                url=f"https://mail.google.com/mail/u/0/#all/{message_id}",
+                author=sender or None,
+                timestamp=parse_short_date(row[3]) if len(row) > 3 else None,
+                rank_in_source=len(hits),
+                raw={"row": row} if debug else None,
+            )
+        )
+    return hits
+
+
+_HEADING_LINE = re.compile(r"^#{1,6}\s")
+_KEY_VALUE_LINE = re.compile(r"^\*\*[^*]+:\*\*")
+_BOILERPLATE = ("**Next steps:**", "**Session context**")
+
+
+def extract_report_body(text: str) -> str:
+    """The document or message body from a `get`/`read` response.
+
+    The two shapes differ, which is why this cannot just split on `---`:
+
+      manage_docs get   `## title`, `**Key:** value` lines, `---`, BODY, `---`, boilerplate
+      manage_email read `## title`, `**Key:** value` lines, BODY, then boilerplate
+
+    So the body is after the header block in one case and after a rule in the
+    other. Rather than special-casing each tool, take the first `---`-section
+    that still has real prose once the heading and the `**Key:** value` lines
+    are removed.
+    """
+    for section in re.split(r"(?m)^---\s*$", text or ""):
+        if any(marker in section for marker in _BOILERPLATE):
+            # Trim at the boilerplate; anything before it may still be body.
+            for marker in _BOILERPLATE:
+                index = section.find(marker)
+                if index != -1:
+                    section = section[:index]
+
+        kept = [
+            line
+            for line in section.splitlines()
+            if line.strip() and not _HEADING_LINE.match(line.strip()) and not _KEY_VALUE_LINE.match(line.strip())
+        ]
+        body = "\n".join(kept).strip()
+        if body:
+            return body
+    return ""
 
 
 def _first(payload: dict[str, Any], *names: str) -> Any:
@@ -192,9 +427,15 @@ class GoogleWorkspaceConnector:
         return configured or self._settings.google_account_email or None
 
     def _base_args(self) -> dict[str, Any]:
-        # The server is multi-account and routes on this. Omitted rather than
-        # sent empty when unset, so it can fall back to its own default.
-        return {"email": self._account} if self._account else {}
+        # `email` is REQUIRED by both tool schemas - the server is
+        # multi-account and has no notion of a default one. There is nothing
+        # to fall back to, so a missing account is a configuration error
+        # raised before the call rather than a schema rejection after it.
+        if not self._account:
+            raise McpError(
+                "GOOGLE_ACCOUNT_EMAIL is not set, and the Google tools require an account address"
+            )
+        return {"email": self._account}
 
     async def _call(self, tool: str, arguments: dict[str, Any]) -> RawToolResult:
         """Route a call through whichever transport is configured.
@@ -224,10 +465,12 @@ class GoogleWorkspaceConnector:
         }
 
         if not self._account:
-            report["warning"] = (
-                "GOOGLE_ACCOUNT_EMAIL is not set, so the server will use whichever account "
-                "it considers default"
-            )
+            # Not a warning but a hard failure: `email` is a required
+            # argument on every Google tool, so without it no call can be
+            # made at all.
+            report["ok"] = False
+            report["error"] = "GOOGLE_ACCOUNT_EMAIL is not set, and every Google tool requires it"
+            return report
 
         try:
             if self._settings.google_mcp_mode == "stdio":
@@ -265,13 +508,15 @@ class GoogleWorkspaceConnector:
         started = time.monotonic()
         result = SourceResult(source_key=self.key)
 
-        arguments = {**self._base_args(), "operation": "search", "query": query}
-        # Both tools take a page size, under different names depending on
-        # which API they front; sending both is harmless and saves guessing.
-        arguments["pageSize"] = limit
-        arguments["maxResults"] = limit
+        is_drive = self.key == SOURCE_GOOGLE_DRIVE
 
         try:
+            arguments = {
+                **self._base_args(),
+                "operation": "search",
+                "query": drive_query(query) if is_drive else gmail_query(query),
+                "maxResults": min(limit, MAX_RESULTS),
+            }
             raw = await self._call(self._tool, arguments)
         except Exception as exc:  # noqa: BLE001 - isolation is the contract
             logger.warning("%s search failed: %s", self.key, summarise_exception(exc))
@@ -279,25 +524,104 @@ class GoogleWorkspaceConnector:
             result.elapsed_ms = int((time.monotonic() - started) * 1000)
             return result
 
-        payload = raw.payload(source=self.key, tool=self._tool)
-        items = items_from(payload)
-        builder = drive_hit if self.key == SOURCE_GOOGLE_DRIVE else email_hit
+        hits, shape = self._to_hits(raw, limit=limit, debug=ctx.debug)
 
-        hits: list[SearchHit] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            hit = builder(item, len(hits), source_key=self.key, debug=ctx.debug)
-            if hit is not None:
-                hits.append(hit)
-            if len(hits) >= limit:
-                break
+        # Search results carry no body text, so an answer built on them would
+        # have titles to cite and nothing to quote. Enriching a bounded number
+        # of the top hits is what makes a citation worth following.
+        enriched = 0
+        if hits and self._settings.google_enrich_hits > 0:
+            enriched = await self._enrich(hits[: self._settings.google_enrich_hits])
 
         result.hits = hits
-        result.detail = {"tool": self._tool, "items": len(items), "account": self._account}
-        if items and not hits:
-            # Something came back and none of it was recognisable - the most
-            # likely symptom of the unverified shapes above.
-            result.detail["warning"] = "results were returned but none could be mapped"
+        result.detail = {
+            "tool": self._tool,
+            "shape": shape,
+            "account": self._account,
+            "enriched": enriched,
+        }
+        if shape == "unrecognised":
+            result.detail["warning"] = "the response could not be parsed as JSON or as a Markdown report"
         result.elapsed_ms = int((time.monotonic() - started) * 1000)
         return result
+
+    def _to_hits(self, raw: RawToolResult, *, limit: int, debug: bool) -> tuple[list[SearchHit], str]:
+        """Map a response to hits, reporting which shape it turned out to be.
+
+        JSON is tried first even though this server has never produced any:
+        it costs one branch, and it means a future version that populates
+        `structuredContent` properly starts working rather than starts
+        failing.
+        """
+        is_drive = self.key == SOURCE_GOOGLE_DRIVE
+
+        # Only ask the payload ladder when the response could plausibly be
+        # structured. Calling it unconditionally logs "unreadable payload" for
+        # every single response from this server, since Markdown is its normal
+        # output - a warning that would train the reader to ignore warnings.
+        stripped = (raw.text or "").lstrip()
+        items: list[Any] = []
+        if raw.structured is not None or stripped[:1] in ("{", "["):
+            items = items_from(raw.payload(source=self.key, tool=self._tool))
+        if items:
+            builder = drive_hit if is_drive else email_hit
+            hits: list[SearchHit] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                hit = builder(item, len(hits), source_key=self.key, debug=debug)
+                if hit is not None:
+                    hits.append(hit)
+                if len(hits) >= limit:
+                    break
+            if hits:
+                return hits, "json"
+
+        parser = drive_hits_from_markdown if is_drive else email_hits_from_markdown
+        hits = parser(raw.text, source_key=self.key, debug=debug)[:limit]
+        if hits:
+            return hits, "markdown"
+
+        # A genuinely empty result reads "No messages found for query: …",
+        # which is a successful search of nothing rather than a parse failure.
+        if _HEADING.search(raw.text or "") or "No " in (raw.text or ""):
+            return [], "markdown"
+        return [], "unrecognised"
+
+    async def _enrich(self, hits: list[SearchHit]) -> int:
+        """Fetch body text for hits that have none, in place.
+
+        Search returns metadata only, so without this an answer has titles to
+        cite and nothing to quote - which defeats the point of citations.
+
+        One extra call per hit, which is why the caller bounds how many. Only
+        Google Docs and Gmail messages: a PDF or an image has nothing to
+        extract this way.
+
+        A failure here is deliberately silent. A hit with a title and a
+        working link is still useful, and losing a whole source because one
+        document could not be read would be far worse.
+        """
+        enriched = 0
+        for hit in hits:
+            if not hit.external_id or hit.snippet:
+                continue
+
+            if hit.kind == "email":
+                tool, args = "manage_email", {"operation": "read", "messageId": hit.external_id}
+            elif "docs.google.com/document" in (hit.url or ""):
+                tool, args = "manage_docs", {"operation": "get", "documentId": hit.external_id}
+            else:
+                continue
+
+            try:
+                raw = await self._call(tool, {"email": self._account, **args})
+            except Exception as exc:  # noqa: BLE001
+                logger.info("could not read %s: %s", hit.external_id, summarise_exception(exc))
+                continue
+
+            body = extract_report_body(raw.text)
+            if body:
+                hit.snippet = truncate(body, SNIPPET_CHARS)
+                enriched += 1
+        return enriched

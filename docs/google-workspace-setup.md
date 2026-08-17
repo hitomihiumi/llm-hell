@@ -1,8 +1,8 @@
 # Connecting Google Workspace
 
 This is the one source that cannot be set up entirely from the server. The
-MCP server needs an OAuth consent that opens a browser, so the tokens are
-produced **once on your own machine** and then mounted into the container.
+MCP server's OAuth consent opens a browser, so the tokens are produced
+**once on your own machine** and then mounted into the container.
 
 Budget 15–20 minutes, most of it waiting on the Google Cloud console.
 
@@ -13,11 +13,19 @@ Budget 15–20 minutes, most of it waiting on the Google Cloud console.
 - The MCP server (`@aaronsb/google-workspace-mcp`) speaks **stdio only** — it
   has no HTTP mode. The `google-mcp` container wraps it with `supergateway`
   so the API can reach it over HTTP like the other two sources.
-- It **shells out to `gws`**, Google's Workspace CLI, which is a separate npm
-  package (`@googleworkspace/cli`) and not one of its dependencies. Both are
-  installed in the image.
-- The consent screen is a browser flow. There is no headless equivalent, so
+- **It manages its own OAuth** and calls Google's REST APIs directly. It has
+  its own account registry and its own token store, separate from anything
+  else on the machine.
+- The consent screen is a browser flow with no headless equivalent, so
   step 3 below happens on your workstation.
+
+> **It does not need `gws`, Google's Workspace CLI.** A lot of writing about
+> this package — including an earlier version of this document — says it
+> shells out to that Rust binary. Verified against v4.2.1: it uses `fetch`
+> with a bearer token against Google's APIs, the only `gws` strings in it are
+> a `gws://` MCP resource URI scheme and temp-file prefixes, and the only
+> child process it spawns is a browser during consent. Do not bother
+> installing `@googleworkspace/cli`.
 
 ---
 
@@ -30,16 +38,14 @@ Budget 15–20 minutes, most of it waiting on the Google Cloud console.
    - Gmail API
 3. **APIs & Services → OAuth consent screen**:
    - User type **External** is fine for a personal account; choose
-     **Internal** if this is a Workspace organisation and you only need your
-     own users.
-   - Fill in the app name and your support email.
-   - Under **Test users**, add the Google account you are going to search.
-     Without this, consent fails with `access_blocked` while the app is
-     unpublished.
+     **Internal** for a Workspace organisation.
+   - Fill in the app name and support email.
+   - Under **Test users**, add the account you are going to search. Without
+     this, consent fails with `access_blocked` while the app is unpublished.
 4. **APIs & Services → Credentials → + Create credentials → OAuth client ID**:
-   - Application type: **Desktop app**. This matters — the server expects a
-     desktop client, and a "Web application" client will be rejected at
-     consent because the redirect URI will not match.
+   - Application type: **Desktop app**. This matters — a "Web application"
+     client is rejected at consent because the redirect URI will not match
+     the loopback address the server listens on.
    - Copy the **client ID** and **client secret**.
 
 ## 2. Put the credentials in `.env`
@@ -47,8 +53,9 @@ Budget 15–20 minutes, most of it waiting on the Google Cloud console.
 ```bash
 GOOGLE_CLIENT_ID=<your client id>
 GOOGLE_CLIENT_SECRET=<your client secret>
-# The account whose Drive and Gmail get searched. The server is
-# multi-account; this picks which one.
+# The account whose Drive and Gmail get searched. This is NOT optional -
+# every Google tool takes `email` as a required argument, because the server
+# is multi-account and has no notion of a default one.
 GOOGLE_ACCOUNT_EMAIL=you@example.com
 ```
 
@@ -59,42 +66,56 @@ GOOGLE_ACCOUNT_EMAIL=you@example.com
 Requires **Node.js ≥ 22.12**.
 
 ```bash
-npm install -g @aaronsb/google-workspace-mcp @googleworkspace/cli
+npm install -g @aaronsb/google-workspace-mcp
 ```
 
-Confirm the CLI landed on your PATH — the MCP server's failure mode without
-it is an empty result set, which is indistinguishable from "nothing matched":
-
-```bash
-gws --version
-```
-
-Now run the server and trigger the consent flow. The server speaks MCP over
-stdin, so drive it with the inspector rather than by hand:
+The server speaks MCP over stdin, so drive it with the inspector rather than
+by hand:
 
 ```bash
 GOOGLE_CLIENT_ID=<id> GOOGLE_CLIENT_SECRET=<secret> \
   npx -y @modelcontextprotocol/inspector google-workspace-mcp
 ```
 
-In the inspector, call the `manage_accounts` tool with:
+Call `manage_accounts` with:
 
 ```json
-{ "operation": "authenticate", "email": "you@example.com" }
+{ "operation": "authenticate", "category": "work" }
 ```
 
-A browser window opens. Grant the requested scopes. The server writes:
+A browser window opens. **Note what you are granting**: `authenticate` takes
+no scope argument and requests the server's full set — read/write on Drive,
+Gmail, Calendar, Sheets, Docs, Tasks, Slides and Meet. There are no
+read-only variants in its scope map. If that is more than you want, complete
+it and then narrow with:
+
+```json
+{ "operation": "scopes", "email": "you@example.com", "services": "drive,gmail" }
+```
+
+which triggers a second consent for the reduced set. Access can be revoked at
+any time at <https://myaccount.google.com/permissions>.
+
+The server then writes:
 
 | what | where (Linux/macOS) |
 | --- | --- |
 | account registry | `~/.config/google-workspace-mcp/accounts.json` |
-| OAuth tokens | `~/.local/share/google-workspace-mcp/credentials/` |
+| refresh tokens | `~/.local/share/google-workspace-mcp/credentials/<slug>.json` |
 
-On Windows these live under `%APPDATA%` and `%LOCALAPPDATA%` respectively.
+On Windows these are under `%APPDATA%` and `%LOCALAPPDATA%`.
 
-Verify it worked before moving on — call `manage_drive` with
-`{"operation": "search", "query": "test", "email": "you@example.com"}` and
-confirm you get files back.
+Verify before moving on — call `manage_drive` with:
+
+```json
+{ "operation": "search", "email": "you@example.com",
+  "query": "fullText contains 'test'", "maxResults": 5 }
+```
+
+**`query` is Drive's own query language, not free text.** A bare phrase is a
+syntax error, not a search. The connector builds `fullText contains '…'` for
+you; this is only what to type when testing by hand. Gmail's `query` is
+Gmail search syntax, where bare terms do work.
 
 ## 4. Copy the tokens into the repo
 
@@ -109,64 +130,65 @@ the way you would treat a private key.
 
 ## 5. Start the container
 
-The service is behind a compose profile, because without credentials it
-starts fine and then fails every call:
+Behind a compose profile, because without credentials it starts fine and then
+fails every call:
 
 ```bash
 docker compose --profile google up -d --build google-mcp
-```
-
-Check it:
-
-```bash
 docker compose logs google-mcp --tail 20
 ```
 
-## 6. Confirm from the application
+## 6. Enable the sources
+
+They are seeded **disabled** when no credentials are configured, so that an
+unreachable source does not add its connection timeout to every search. Turn
+them on from the **Sources** page, or:
 
 ```bash
-docker compose exec api python manage.py list-sources
+docker compose exec -T postgres psql -U llmhell -d llmhell \
+  -c "UPDATE sources SET enabled = true WHERE key LIKE 'google%';"
 ```
 
-then, logged in as an admin in the web UI, open **Sources** and press
-**Check** on Google Drive. It should report reachable with a tool list
-including `manage_drive` and `manage_email`.
-
-Or probe it directly and capture the response shape:
-
-```bash
-python tools/mcp_probe.py --url http://localhost:3103/mcp \
-  call manage_drive '{"operation":"search","query":"onboarding"}' \
-  --save backend/tests/fixtures/mcp/google_drive_search.json
-```
-
-**Please do this last step.** The Drive and Gmail result adapters in
-`backend/app/services/mcp/google.py` were written without a live server to
-probe — unlike the GitLab and Postgres ones — so their field names come from
-the underlying REST APIs rather than from an observed response. Saving a real
-response as a fixture is what turns them from educated guesses into
-tested code. If `manage_drive` returns results but the UI shows none, the
-source badge will say *"results were returned but none could be mapped"*,
-which is that guess being wrong.
+Then press **Check** on the Sources page. It should report reachable with a
+tool list including `manage_drive` and `manage_email`.
 
 ---
 
 ## Troubleshooting
 
 **`access_blocked` during consent.** The OAuth app is unpublished and your
-account is not in **Test users**. Add it in the consent screen settings.
+account is not in **Test users**.
 
-**`gws: not found` in the container logs.** The `@googleworkspace/cli`
-postinstall failed to fetch its binary at build time. Rebuild with
-`docker compose build --no-cache google-mcp` and watch for a download error;
-the image has a build-time check that should catch this.
+**Every call fails with a schema validation error.** Both tool schemas are
+`additionalProperties: false` and require `email`. An extra argument is
+rejected outright rather than ignored.
 
 **Searches work for a while and then start failing.** The token store is
 mounted read-write for a reason — the server refreshes tokens and rewrites
 those files. Check the mounts in `docker-compose.yml` are not `:ro`.
 
+**Searches are slow (~5s).** The bridge must run `--stateful`, or
+supergateway respawns the server on every request. Since the federated
+fan-out waits for its slowest source, that penalty lands on every search in
+the application, not just Google's.
+
+**Hits have titles but no text to quote.** Search returns metadata only, so
+content comes from a second call per hit, bounded by `GOOGLE_ENRICH_HITS`.
+Setting it to 0 disables that and leaves answers with nothing to cite.
+
+**Results come back but the UI shows none.** The source badge will say
+*"the response could not be parsed as JSON or as a Markdown report"*. This
+server answers in Markdown, not JSON, so that means its report format has
+changed; capture it and fix the mapping:
+
+```bash
+python tools/mcp_probe.py --url http://localhost:3103/mcp \
+  call manage_drive '{"operation":"search","email":"you@example.com","query":"fullText contains '"'"'x'"'"'","maxResults":5}' \
+  --save backend/tests/fixtures/mcp/google_drive_search.json
+```
+
 **Do not run the API with multiple workers in `stdio` mode.**
 `GOOGLE_MCP_MODE=stdio` makes the API spawn the server as a child process;
 N workers means N processes refreshing and rewriting the same token file,
 which can race and invalidate the refresh token. The default `http` mode has
-no such limit. The API logs a warning if it detects `WEB_CONCURRENCY`.
+no such limit, and the API logs a warning if it sees `WEB_CONCURRENCY`.

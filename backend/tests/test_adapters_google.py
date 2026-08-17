@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.models.source import SOURCE_GOOGLE_DRIVE, SOURCE_GOOGLE_MAIL
 from app.services.mcp.connector import SearchContext
 from app.services.mcp.google import GoogleWorkspaceConnector, drive_hit, email_hit, items_from
+from app.services.mcp.transport import McpError
 
 
 def ctx(debug: bool = False) -> SearchContext:
@@ -213,10 +214,13 @@ def test_unsupported_surface_is_rejected_at_construction():
         GoogleWorkspaceConnector(None, Settings(), key="google_calendar")
 
 
-def test_account_is_omitted_rather_than_sent_empty():
-    """An empty `email` would override the server's own default account
-    with nothing."""
-    assert connector(google_account_email="")._base_args() == {}
+def test_account_is_required_and_fails_fast_when_missing():
+    """`email` is a REQUIRED argument on every Google tool - the server is
+    multi-account and has no default - so a missing address is a
+    configuration error raised before the call, not a schema rejection
+    after it."""
+    with pytest.raises(McpError):
+        connector(google_account_email="")._base_args()
     assert connector(google_account_email="a@b.c")._base_args() == {"email": "a@b.c"}
 
 
@@ -227,9 +231,11 @@ async def test_search_reports_a_transport_failure_without_raising():
     assert result.source_key == SOURCE_GOOGLE_DRIVE
 
 
-async def test_health_warns_when_no_account_is_configured():
+async def test_health_fails_when_no_account_is_configured():
+    """Reported as an outright failure rather than a warning: without an
+    account address not a single call can be made."""
     report = await connector(
         google_account_email="", google_mcp_url="http://127.0.0.1:1/mcp"
     ).health()
-    assert "warning" in report
     assert report["ok"] is False
+    assert "GOOGLE_ACCOUNT_EMAIL" in report["error"]

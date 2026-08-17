@@ -1,0 +1,20 @@
+{
+  "tool": "manage_drive",
+  "arguments": {
+    "operation": "search",
+    "email": "demo@example.com",
+    "query": "fullText contains 'test'",
+    "maxResults": 5
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "## Files (1)\n\n1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcde | TEST | g/document | Aug 17 | 2.2 KB\n\n---\n**Next steps:**\n- Get file details: `manage_drive` \u2014 `{\"operation\":\"get\",\"email\":\"demo@example.com\",\"fileId\":\"<id from results>\"}`\n- Download a file: `manage_drive` \u2014 `{\"operation\":\"download\",\"email\":\"demo@example.com\",\"fileId\":\"<id>\"}`\n\n---\n**Session context** (demo@example.com):\n- No new unread emails since session start (2 unread, 2 today)\n- No more events today",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": null
+}
