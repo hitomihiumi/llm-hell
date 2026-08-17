@@ -2,8 +2,8 @@
 
 Separate from `registry.py` purely to keep that module free of imports of
 every concrete connector - `get_mcp_registry()` imports this lazily, which
-also keeps `transport.py` (and therefore the MCP SDK) off the import path of
-anything that only needs the registry type.
+also keeps the MCP SDK off the import path of anything that only needs the
+registry type.
 """
 
 from app.core.config import Settings
@@ -15,6 +15,7 @@ from app.models.source import (
 )
 from app.services.mcp.connector import Connector
 from app.services.mcp.gitlab import GitLabConnector
+from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.postgres import PostgresKbConnector
 
 
@@ -26,13 +27,14 @@ def build_connectors(settings: Settings) -> list[Connector]:
     per-source error on the search response, which is far more useful than
     silently not existing. Whether a source is searched at all is decided by
     `Source.enabled` in the database.
+
+    Drive and Gmail are two connectors over one MCP server, because they have
+    different result shapes and different usefulness - a tester should be
+    able to switch off email search without losing Drive.
     """
     return [
         GitLabConnector(None, settings, key=SOURCE_GITLAB),
         PostgresKbConnector(None, settings, key=SOURCE_POSTGRES_KB),
+        GoogleWorkspaceConnector(None, settings, key=SOURCE_GOOGLE_DRIVE),
+        GoogleWorkspaceConnector(None, settings, key=SOURCE_GOOGLE_MAIL),
     ]
-
-
-# Google is added in the next phase; these are referenced here so the import
-# is not flagged as unused and the intended key set is visible in one place.
-ALL_SOURCE_KEYS = (SOURCE_GITLAB, SOURCE_POSTGRES_KB, SOURCE_GOOGLE_DRIVE, SOURCE_GOOGLE_MAIL)

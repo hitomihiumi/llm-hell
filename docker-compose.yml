@@ -123,6 +123,35 @@ services:
     ports:
       - "127.0.0.1:3102:3002"
 
+  google-mcp:
+    build:
+      context: ./docker/google-mcp
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    volumes:
+      # Read-WRITE, both of them: the server refreshes OAuth tokens and
+      # rewrites the files in place. A read-only mount works until the first
+      # token expiry and then fails in a way that looks like revoked access.
+      #
+      # These are produced on a workstation by completing the browser consent
+      # once - it cannot happen inside a container. See
+      # docs/google-workspace-setup.md.
+      - ./secrets/google-workspace/config:/data/config/google-workspace-mcp
+      - ./secrets/google-workspace/share:/data/share/google-workspace-mcp
+    ports:
+      # Loopback only, for tools/mcp_probe.py. The api container reaches it
+      # by service name.
+      - "127.0.0.1:3103:3003"
+    profiles:
+      # Opt-in: without OAuth credentials this container starts and then
+      # fails every call, and a demo of the other two sources should not
+      # have to look at that. Bring it up with
+      #   docker compose --profile google up -d google-mcp
+      - google
+
   postgres-mcp:
     image: crystaldba/postgres-mcp
     restart: unless-stopped
