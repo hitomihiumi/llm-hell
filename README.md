@@ -23,6 +23,11 @@ into one shape, fuses the rankings, and streams the answer back over SSE.
 
 ## What it does
 
+- **Two layouts** over the same pipeline, switchable in the header.
+  **Search** keeps the machinery visible: per-source timings, the SQL that was
+  generated, the whole ranked list at once. **Chat** is the familiar
+  conversational shape, with sources behind a per-answer disclosure and
+  follow-up questions carrying the previous turns.
 - **Minimal auth** — username + password, httpOnly cookie session.
 - **Federated search** with a deep link on every hit: a Drive/Gmail
   permalink, a GitLab blob URL with a line anchor, or an internal record page
