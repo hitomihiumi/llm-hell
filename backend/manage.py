@@ -22,8 +22,10 @@ from sqlalchemy import select
 
 from app.core.api_keys import generate_api_key, hash_api_key
 from app.core.db import SessionLocal
+from app.core.security import hash_password
 from app.models.api_key import ApiKey
 from app.models.endpoint import DEFAULT_REASONING_PROFILE, ModelEndpoint
+from app.models.source import Source
 from app.models.user import User
 from app.services.llm.model_routing import published_model_ids
 from app.services.llm.probe import check_endpoint
@@ -38,11 +40,47 @@ async def cmd_create_user(args: argparse.Namespace) -> None:
             print(f"user {args.username!r} already exists (id={existing.id})", file=sys.stderr)
             raise SystemExit(1)
 
-        user = User(username=args.username, role=args.role)
+        user = User(
+            username=args.username,
+            role=args.role,
+            email=args.email,
+            display_name=args.display_name,
+            # Without --password the account can still use the API-key
+            # proxy but cannot log in to the web app, which is the pre-web
+            # behaviour and stays the default.
+            password_hash=hash_password(args.password) if args.password else None,
+        )
         db.add(user)
         await db.commit()
         await db.refresh(user)
-        print(f"created user {user.username!r} (id={user.id}, role={user.role})")
+        login = "can log in to the web app" if user.password_hash else "API key only, no web login"
+        print(f"created user {user.username!r} (id={user.id}, role={user.role}) - {login}")
+
+
+async def cmd_set_password(args: argparse.Namespace) -> None:
+    async with SessionLocal() as db:
+        user = (await db.execute(select(User).where(User.username == args.username))).scalar_one_or_none()
+        if user is None:
+            print(f"unknown user {args.username!r}", file=sys.stderr)
+            raise SystemExit(1)
+
+        user.password_hash = hash_password(args.password)
+        await db.commit()
+        print(f"password set for {user.username!r}")
+
+
+async def cmd_list_sources(args: argparse.Namespace) -> None:
+    async with SessionLocal() as db:
+        sources = (await db.execute(select(Source).order_by(Source.key))).scalars().all()
+        if not sources:
+            print("no sources - they are seeded on app startup, so start the API once")
+            return
+        for source in sources:
+            state = "enabled" if source.enabled else "disabled"
+            checked = source.last_checked_at.isoformat() if source.last_checked_at else "never"
+            print(f"{source.key:<16} {source.kind:<18} {state:<9} weight={source.weight:<5} checked={checked}")
+            if source.last_check_result:
+                print(f"    last check: {json.dumps(source.last_check_result)[:200]}")
 
 
 async def cmd_issue_key(args: argparse.Namespace) -> None:
@@ -314,7 +352,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = subparsers.add_parser("create-user", help="Create a new tester/admin account")
     p.add_argument("username")
     p.add_argument("--role", choices=["user", "admin"], default="user")
+    p.add_argument("--password", default=None, help="Enables web login. Omit for an API-key-only account.")
+    p.add_argument("--email", default=None, help="Display metadata only - the login identifier is the username")
+    p.add_argument("--display-name", default=None)
     p.set_defaults(func=cmd_create_user)
+
+    p = subparsers.add_parser("set-password", help="Set or reset a user's web login password")
+    p.add_argument("username")
+    p.add_argument("password")
+    p.set_defaults(func=cmd_set_password)
+
+    p = subparsers.add_parser("list-sources", help="List the configured search sources")
+    p.set_defaults(func=cmd_list_sources)
 
     p = subparsers.add_parser("issue-key", help="Issue a new API key for a user")
     p.add_argument("username")

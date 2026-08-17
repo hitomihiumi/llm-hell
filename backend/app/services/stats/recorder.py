@@ -83,7 +83,9 @@ async def record_request(
     db: AsyncSession,
     *,
     user: User,
-    api_key: ApiKey,
+    # None for answer-synthesis calls made on behalf of a cookie-session
+    # user in the web app, who has no API key at all.
+    api_key: ApiKey | None,
     endpoint: ModelEndpoint | None,
     requested_model: str,
     reasoning_level: str,
@@ -105,7 +107,7 @@ async def record_request(
     db.add(
         LlmRequest(
             user_id=user.id,
-            api_key_id=api_key.id,
+            api_key_id=api_key.id if api_key is not None else None,
             session_id=session_id,
             parent_session_id=parent_session_id,
             model=requested_model,

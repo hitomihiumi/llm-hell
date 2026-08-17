@@ -34,7 +34,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # Migrations run on startup rather than as a documented manual step -
+    # nothing ran them before, so a fresh stack came up against an empty
+    # database and every request 500'd until somebody remembered.
+    #
+    # No `--workers`: the Google Workspace MCP server can be run as a child
+    # process of this one (google_mcp_mode=stdio), and N workers would mean N
+    # subprocesses writing the same OAuth token file. See
+    # app/services/mcp/registry.py.
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     ports:
       # Not loopback-only: this is the OpenAI-compatible endpoint opencode on
       # testers' machines talks to over the network.

@@ -1,12 +1,24 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-sqlalchemy==2.0.36
-greenlet==3.1.1
-asyncpg==0.30.0
-alembic==1.14.0
-pydantic==2.10.4
-pydantic-settings==2.7.0
+# 2.0.36 crashes at import on CPython 3.14: its `Optional[...]` annotation
+# de-stringifier calls Union.__getitem__ with a tuple, which 3.14's typing
+# rejects, so every declarative model fails to map.
+sqlalchemy==2.0.52
+alembic==1.19.1
 argon2-cffi==23.1.0
 httpx==0.28.1
 openai==1.58.1
 prometheus-client==0.21.1
+
+# These three ship compiled extensions, and the previously pinned versions
+# predate CPython 3.14 - there are no wheels for it, so `pip install` tried
+# to build pydantic-core from Rust source and failed. The image is 3.12, but
+# a developer running the suite outside Docker is on whatever their machine
+# has, and a requirements file that only installs on one interpreter is a
+# trap. These versions all publish cp314 wheels.
+#
+# pydantic also has a floor of its own: the MCP SDK requires >=2.11.
+greenlet==3.5.5
+asyncpg==0.31.0
+pydantic==2.13.4
+pydantic-settings==2.7.0

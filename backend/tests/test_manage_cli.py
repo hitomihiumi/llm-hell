@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import manage
 from app.core.api_keys import authenticate_api_key
+from app.core.security import verify_password
 from app.models.api_key import ApiKey
 from app.models.endpoint import ModelEndpoint
+from app.models.source import Source
 from app.models.user import User
 from app.services.llm.probe import EndpointProbeReport, LevelProbeResult
 
@@ -19,21 +21,110 @@ def _use_test_db(test_db_engine, monkeypatch):
     return session_maker
 
 
+def user_args(username: str, **overrides) -> Namespace:
+    """A `create-user` Namespace with every optional argument defaulted.
+
+    argparse fills these in for a real invocation, so a hand-built Namespace
+    that omits them is testing a shape the CLI never actually produces - and
+    it breaks every time a new option is added, which is exactly what
+    happened when --password arrived.
+    """
+    return Namespace(
+        **{
+            "username": username,
+            "role": "user",
+            "password": None,
+            "email": None,
+            "display_name": None,
+            **overrides,
+        }
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_user_then_duplicate_fails(_use_test_db) -> None:
-    await manage.cmd_create_user(Namespace(username="alice", role="admin"))
+    await manage.cmd_create_user(user_args("alice", role="admin"))
 
     async with _use_test_db() as db:
         user = (await db.execute(select(User).where(User.username == "alice"))).scalar_one()
         assert user.role == "admin"
 
     with pytest.raises(SystemExit):
-        await manage.cmd_create_user(Namespace(username="alice", role="user"))
+        await manage.cmd_create_user(user_args("alice"))
+
+
+@pytest.mark.asyncio
+async def test_create_user_without_password_cannot_log_in(_use_test_db) -> None:
+    """The pre-web default: an account provisioned for the API-key proxy
+    only. A null hash is what makes the login route reject it."""
+    await manage.cmd_create_user(user_args("keyonly"))
+
+    async with _use_test_db() as db:
+        user = (await db.execute(select(User).where(User.username == "keyonly"))).scalar_one()
+        assert user.password_hash is None
+
+
+@pytest.mark.asyncio
+async def test_create_user_with_password_stores_a_hash_not_the_password(_use_test_db) -> None:
+    await manage.cmd_create_user(user_args("weblogin", password="s3cret-pw", email="w@example.com"))
+
+    async with _use_test_db() as db:
+        user = (await db.execute(select(User).where(User.username == "weblogin"))).scalar_one()
+        assert user.password_hash is not None
+        assert "s3cret-pw" not in user.password_hash
+        assert verify_password("s3cret-pw", user.password_hash)
+        assert user.email == "w@example.com"
+
+
+@pytest.mark.asyncio
+async def test_set_password_enables_login_for_an_existing_user(_use_test_db) -> None:
+    await manage.cmd_create_user(user_args("later"))
+    await manage.cmd_set_password(Namespace(username="later", password="added-after"))
+
+    async with _use_test_db() as db:
+        user = (await db.execute(select(User).where(User.username == "later"))).scalar_one()
+        assert verify_password("added-after", user.password_hash)
+
+
+@pytest.mark.asyncio
+async def test_set_password_replaces_the_old_one(_use_test_db) -> None:
+    await manage.cmd_create_user(user_args("rotate", password="old-pw"))
+    await manage.cmd_set_password(Namespace(username="rotate", password="new-pw"))
+
+    async with _use_test_db() as db:
+        user = (await db.execute(select(User).where(User.username == "rotate"))).scalar_one()
+        assert verify_password("new-pw", user.password_hash)
+        assert not verify_password("old-pw", user.password_hash)
+
+
+@pytest.mark.asyncio
+async def test_set_password_for_unknown_user_fails(_use_test_db) -> None:
+    with pytest.raises(SystemExit):
+        await manage.cmd_set_password(Namespace(username="ghost", password="x"))
+
+
+@pytest.mark.asyncio
+async def test_list_sources_reports_seeded_rows(_use_test_db, capsys) -> None:
+    async with _use_test_db() as db:
+        db.add(Source(key="gitlab", kind="gitlab", display_name="GitLab", config={}))
+        db.add(Source(key="postgres_kb", kind="postgres", display_name="KB", enabled=False, config={}))
+        await db.commit()
+
+    await manage.cmd_list_sources(Namespace())
+    output = capsys.readouterr().out
+    assert "gitlab" in output and "enabled" in output
+    assert "postgres_kb" in output and "disabled" in output
+
+
+@pytest.mark.asyncio
+async def test_list_sources_when_none_configured(_use_test_db, capsys) -> None:
+    await manage.cmd_list_sources(Namespace())
+    assert "no sources" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
 async def test_issue_key_then_authenticate(_use_test_db, capsys) -> None:
-    await manage.cmd_create_user(Namespace(username="bob", role="user"))
+    await manage.cmd_create_user(user_args("bob"))
     capsys.readouterr()  # discard create-user's own output
     await manage.cmd_issue_key(Namespace(username="bob", name="laptop"))
 
@@ -57,7 +148,7 @@ async def test_issue_key_for_unknown_user_fails(_use_test_db) -> None:
 
 @pytest.mark.asyncio
 async def test_revoke_key_disables_authentication(_use_test_db, capsys) -> None:
-    await manage.cmd_create_user(Namespace(username="carol", role="user"))
+    await manage.cmd_create_user(user_args("carol"))
     capsys.readouterr()  # discard create-user's own output
     await manage.cmd_issue_key(Namespace(username="carol", name="phone"))
     raw_key = capsys.readouterr().out.splitlines()[1]
@@ -84,7 +175,7 @@ async def test_revoke_unknown_prefix_fails(_use_test_db) -> None:
 
 @pytest.mark.asyncio
 async def test_list_keys_reports_status(_use_test_db, capsys) -> None:
-    await manage.cmd_create_user(Namespace(username="dana", role="user"))
+    await manage.cmd_create_user(user_args("dana"))
     await manage.cmd_issue_key(Namespace(username="dana", name="ci"))
     capsys.readouterr()
 
@@ -100,7 +191,7 @@ async def test_list_keys_includes_users_with_no_keys_issued(_use_test_db, capsys
     # A user right after `create-user` but before any `issue-key` must
     # still show up - otherwise there's no way to tell "no key yet" apart
     # from "user doesn't exist" just by looking at `list-keys`.
-    await manage.cmd_create_user(Namespace(username="member", role="user"))
+    await manage.cmd_create_user(user_args("member"))
     capsys.readouterr()
 
     await manage.cmd_list_keys(Namespace(username=None))

@@ -19,11 +19,18 @@ class LlmRequest(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
-    api_key_id: Mapped[str] = mapped_column(String(36), ForeignKey("api_keys.id"), nullable=False)
+    # Nullable since the knowledge-base UI arrived: answer-synthesis calls
+    # are made on behalf of a cookie-session user, who has no API key at
+    # all. Minting a hidden "web" ApiKey row just to satisfy a NOT NULL
+    # would put a credential in the database that nobody can use and that
+    # `list-keys` would then display.
+    api_key_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("api_keys.id"), nullable=True)
 
     # Correlates requests belonging to one opencode conversation - from the
     # `x-session-affinity` header opencode sends by default, or a fallback
-    # hash when that header is absent (see services.stats.recorder).
+    # hash when that header is absent (see services.stats.recorder). For
+    # answer-synthesis calls it is the SearchQuery.id instead, which is what
+    # joins a search to the LLM call it triggered.
     session_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     parent_session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
