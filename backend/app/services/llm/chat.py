@@ -55,6 +55,7 @@ def _body(
     max_tokens: int,
     temperature: float,
     stream: bool,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": endpoint.model_id,
@@ -67,6 +68,11 @@ def _body(
         # Without this the final chunk carries no usage block and token
         # counts for the answer call are silently zero.
         body["stream_options"] = {"include_usage": True}
+    # Server-specific fields the caller needs, merged last so a caller can
+    # override a default above. Used for `chat_template_kwargs`, which is how
+    # a reasoning model is told not to think on a given request.
+    if extra:
+        body.update(extra)
     return body
 
 
@@ -90,12 +96,20 @@ async def complete(
     max_tokens: int = 1024,
     temperature: float = 0.2,
     timeout: float = 120.0,
+    extra_body: dict[str, Any] | None = None,
 ) -> ChatResult:
     """One non-streaming completion."""
     try:
         response = await http_client.post(
             _url(endpoint),
-            json=_body(endpoint, messages, max_tokens=max_tokens, temperature=temperature, stream=False),
+            json=_body(
+                endpoint,
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=False,
+                extra=extra_body,
+            ),
             headers=_headers(endpoint),
             timeout=timeout,
         )

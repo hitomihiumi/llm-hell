@@ -164,12 +164,44 @@ def test_unparseable_dates_return_none_rather_than_raising(value):
 def test_drive_query_wraps_in_fulltext_contains():
     """A bare phrase is a syntax error in Drive's query language, not a
     search."""
-    assert drive_query("rank fusion") == "fullText contains 'rank fusion'"
+    assert drive_query("fusion") == "(fullText contains 'fusion') and trashed = false"
+
+
+def test_drive_query_ors_the_terms_rather_than_matching_a_phrase():
+    """`fullText contains 'test document'` is an exact-phrase match, so a
+    document titled TEST full of prose does not match it. Asking for "the test
+    document" returned nothing while the file sat there in plain sight."""
+    built = drive_query("test document")
+
+    assert " or " in built
+    assert "fullText contains 'test'" in built
+    assert "fullText contains 'document'" in built
+
+
+def test_drive_query_drops_stopwords_and_caps_the_terms():
+    built = drive_query("please find me the report about the quarterly revenue forecast")
+
+    assert "fullText contains 'the'" not in built
+    assert "fullText contains 'please'" not in built
+    # Four terms means four clauses, and one `or` fewer than that.
+    assert built.count("fullText contains") == 4
+
+
+def test_drive_query_excludes_trashed_files():
+    """A deleted document offered as a source is worse than no source."""
+    assert drive_query("fusion").endswith("and trashed = false")
 
 
 def test_drive_query_escapes_quotes_and_backslashes():
-    assert drive_query("it's") == "fullText contains 'it\\'s'"
-    assert drive_query("a\\b") == "fullText contains 'a\\\\b'"
+    assert "fullText contains 'it\\'s'" in drive_query("it's")
+    assert "fullText contains 'a\\\\b'" in drive_query("a\\b")
+
+
+def test_drive_query_never_emits_an_empty_expression():
+    """An empty expression is a syntax error, so a query of nothing but
+    stopwords or whitespace still has to produce something runnable."""
+    assert drive_query("   ") == "trashed = false"
+    assert "fullText contains" in drive_query("the and of")
 
 
 def test_gmail_query_is_near_passthrough():

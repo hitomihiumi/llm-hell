@@ -84,6 +84,31 @@ _SURFACES: dict[str, dict[str, Any]] = {
 }
 
 
+def escape_drive_term(text: str) -> str:
+    """Drive's grammar delimits terms with single quotes and escapes with a
+    backslash."""
+    return text.replace("\\", "\\\\").replace("'", "\\'")
+
+
+# Words that would match half of Drive and carry no signal. Kept short and
+# lexical rather than clever: this is a term filter, not a language model.
+_DRIVE_STOPWORDS = frozenset(
+    [
+        # articles, conjunctions, prepositions
+        "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "at",
+        "with", "from", "that", "this", "it", "about",
+        # copulas
+        "is", "are", "was", "were",
+        # question words, which start most of what people type
+        "what", "where", "when", "how", "why", "who",
+        # verbs of asking - present in the question, never in the document
+        "show", "find", "search", "please",
+        "me", "my", "our", "your",
+    ]
+)
+_DRIVE_MAX_TERMS = 4
+
+
 def drive_query(text: str) -> str:
     """Turn a user's words into a Drive API query.
 
@@ -93,11 +118,37 @@ def drive_query(text: str) -> str:
     a search.
 
     `fullText contains` searches name, content and metadata, which is the
-    closest thing to what someone typing into a search box means. Drive's
-    grammar delimits terms with single quotes and escapes with a backslash.
+    closest thing to what someone typing into a search box means.
+
+    The terms are OR-ed rather than passed as one string, and that is the
+    whole point of this function. `fullText contains 'test document'` is an
+    exact-PHRASE search: a document titled "TEST" full of prose does not match
+    it, and neither does anything else a person actually types. Asking "find
+    the test document on Drive" returned zero results while the document sat
+    there in plain sight - the source looked broken when it was merely being
+    asked the wrong question.
+
+    Terms are capped because Drive's query length is not unlimited and a long
+    question is mostly filler; the cap keeps the most specific words, since
+    the ones that carry a query are rarely the short ones.
     """
-    escaped = text.replace("\\", "\\\\").replace("'", "\\'")
-    return f"fullText contains '{escaped}'"
+    words = re.findall(r"[\w'-]{2,}", text or "", re.UNICODE)
+    terms = [word for word in dict.fromkeys(words) if word.lower() not in _DRIVE_STOPWORDS]
+    # Longest first: the specific word in a question is what identifies it.
+    terms = sorted(terms, key=len, reverse=True)[:_DRIVE_MAX_TERMS]
+
+    if not terms:
+        # Nothing usable was left - fall back to the raw text rather than
+        # emitting an empty expression, which is a syntax error.
+        stripped = (text or "").strip()
+        if not stripped:
+            return "trashed = false"
+        return f"fullText contains '{escape_drive_term(stripped)}'"
+
+    clauses = " or ".join(f"fullText contains '{escape_drive_term(term)}'" for term in terms)
+    # Trashed files still match fullText, and offering someone a deleted
+    # document as a source is worse than offering nothing.
+    return f"({clauses}) and trashed = false"
 
 
 def gmail_query(text: str) -> str:

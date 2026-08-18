@@ -56,6 +56,24 @@ logger = logging.getLogger("llmhell.mcp.postgres")
 _ERROR_PREFIXES = ("Error:",)
 SNIPPET_CHARS = 400
 
+# Turning a question into a SELECT is a mechanical translation with the schema
+# already in the prompt - there is nothing here worth deliberating over, and a
+# reasoning model that deliberates anyway is a straight loss.
+#
+# It is also the failure mode this hit in practice. DeepSeek V4 is served with
+# `enable_thinking: true` by default, so it spent the entire 512-token budget
+# reasoning and returned `finish_reason: length` with a null content. The JSON
+# never arrived, `parse_generated` rejected the empty string, and the source
+# silently degraded to its ILIKE fallback on every single search - eight
+# seconds spent to produce nothing.
+#
+# vLLM applies chat_template_kwargs per request, so this disables thinking for
+# this call alone; the answer itself still reasons, which is where it earns
+# its keep. On a server whose template has no such flag the field is ignored,
+# which is why the token budget is raised as well rather than instead.
+_NO_THINKING = {"chat_template_kwargs": {"enable_thinking": False}}
+TEXT2SQL_MAX_TOKENS = 1024
+
 # Candidates for the deterministic fallback, most specific first. Only used
 # when a column of that role is actually present in the introspected schema.
 _SNIPPET_COLUMNS = ("body", "content", "description", "summary", "text")
@@ -242,8 +260,9 @@ class PostgresKbConnector:
                     ctx.answer_endpoint,
                     build_prompt(query, schema=self._schema_text or "", tables=self._tables),
                     http_client=ctx.http_client,
-                    max_tokens=512,
+                    max_tokens=TEXT2SQL_MAX_TOKENS,
                     temperature=0.0,
+                    extra_body=_NO_THINKING,
                 )
                 return parse_generated(completion.content, allowed_tables=self._tables)
             except (chat.ChatError, SqlRejected) as exc:
