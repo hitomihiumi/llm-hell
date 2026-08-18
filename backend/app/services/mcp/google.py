@@ -54,7 +54,13 @@ from typing import Any
 from app.core.config import Settings
 from app.models.source import SOURCE_GOOGLE_DRIVE, SOURCE_GOOGLE_MAIL, Source
 from app.schemas.search import SearchHit
-from app.services.mcp.connector import SearchContext, SourceResult, parse_timestamp, truncate
+from app.services.mcp.connector import (
+    SearchContext,
+    SourceResult,
+    excerpt_around,
+    parse_timestamp,
+    truncate,
+)
 from app.services.mcp.transport import (
     McpError,
     RawToolResult,
@@ -531,7 +537,9 @@ class GoogleWorkspaceConnector:
         # of the top hits is what makes a citation worth following.
         enriched = 0
         if hits and self._settings.google_enrich_hits > 0:
-            enriched = await self._enrich(hits[: self._settings.google_enrich_hits])
+            enriched = await self._enrich(
+                hits[: self._settings.google_enrich_hits], query=query
+            )
 
         result.hits = hits
         result.detail = {
@@ -588,11 +596,16 @@ class GoogleWorkspaceConnector:
             return [], "markdown"
         return [], "unrecognised"
 
-    async def _enrich(self, hits: list[SearchHit]) -> int:
+    async def _enrich(self, hits: list[SearchHit], *, query: str) -> int:
         """Fetch body text for hits that have none, in place.
 
         Search returns metadata only, so without this an answer has titles to
         cite and nothing to quote - which defeats the point of citations.
+
+        The excerpt is centred on where the query matched rather than taken
+        from the top of the document. Drive returns no highlight of any kind,
+        so the alternative is showing a document's opening paragraph to
+        explain a hit that was really about page five.
 
         One extra call per hit, which is why the caller bounds how many. Only
         Google Docs and Gmail messages: a PDF or an image has nothing to
@@ -622,6 +635,6 @@ class GoogleWorkspaceConnector:
 
             body = extract_report_body(raw.text)
             if body:
-                hit.snippet = truncate(body, SNIPPET_CHARS)
+                hit.snippet = excerpt_around(body, query, SNIPPET_CHARS)
                 enriched += 1
         return enriched

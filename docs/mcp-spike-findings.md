@@ -270,6 +270,14 @@ manage_docs get    ## title, **Key:** value lines, ---, BODY, ---, boilerplate
 manage_email read  ## title, **Key:** value lines, BODY, then boilerplate
 ```
 
+There is also **no match highlight anywhere** in the response — nothing says
+which part of the document the query hit. Taking the document's opening as
+the excerpt therefore explains a page-five hit with a first-paragraph quote,
+so `connector.excerpt_around` locates the passage itself and cuts a window
+around it. The same helper serves Postgres, whose rows arrive as a whole
+column with the same problem. GitLab needs none of this: its `data` field is
+already the matched lines.
+
 ### Dates omit the year
 
 `Aug 17`, with no year, for recent items. Assuming the current year

@@ -25,7 +25,12 @@ from app.core.config import Settings
 from app.models.source import Source
 from app.schemas.search import SearchHit
 from app.services.llm import chat
-from app.services.mcp.connector import SearchContext, SourceResult, parse_timestamp, truncate
+from app.services.mcp.connector import (
+    SearchContext,
+    SourceResult,
+    excerpt_around,
+    parse_timestamp,
+)
 from app.services.mcp.transport import (
     McpError,
     call_tool,
@@ -132,7 +137,7 @@ class PostgresKbConnector:
             result.elapsed_ms = int((time.monotonic() - started) * 1000)
             return result
 
-        result.hits = self._to_hits(rows, generated, debug=ctx.debug)
+        result.hits = self._to_hits(rows, generated, query=query, debug=ctx.debug)
         result.detail = {
             "mode": generated.mode,
             "sql": generated.sql,
@@ -218,7 +223,14 @@ class PostgresKbConnector:
         )
         return parse_wrapped_rows(raw.payload(source=self.key, tool="execute_sql"))
 
-    def _to_hits(self, rows: list[dict[str, Any]], generated: GeneratedQuery, *, debug: bool) -> list[SearchHit]:
+    def _to_hits(
+        self,
+        rows: list[dict[str, Any]],
+        generated: GeneratedQuery,
+        *,
+        query: str,
+        debug: bool,
+    ) -> list[SearchHit]:
         hits: list[SearchHit] = []
         for rank, row in enumerate(rows):
             pk = row.get(generated.id_column)
@@ -231,7 +243,7 @@ class PostgresKbConnector:
                     kind="row",
                     external_id=str(pk),
                     title=str(row.get(generated.title_column) or f"{generated.table} #{pk}"),
-                    snippet=truncate(str(row.get(generated.snippet_column) or ""), SNIPPET_CHARS),
+                    snippet=excerpt_around(str(row.get(generated.snippet_column) or ""), query, SNIPPET_CHARS),
                     # A database row has no natural URL, so one is
                     # synthesised and served by GET /api/records - which
                     # resolves the table against the whitelist rather than

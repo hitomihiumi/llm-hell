@@ -10,6 +10,7 @@ the caller has to remember to wrap in a try block. (`service.py` still uses
 has a bug.)
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
@@ -100,6 +101,106 @@ def truncate(text: str | None, limit: int) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[: limit - 1].rstrip() + "…"
+
+
+# Terms shorter than this are ignored when locating the match. Two-letter
+# fragments hit almost everywhere and would anchor the excerpt at random.
+_MIN_TERM_LENGTH = 3
+# How much of the window to spend on lead-in, so the match is a little past
+# the start rather than flush against it and easy to miss.
+_LEAD_IN_CHARS = 70
+
+
+def _query_terms(query: str) -> list[str]:
+    seen: list[str] = []
+    for raw in re.split(r"\W+", (query or "").lower()):
+        if len(raw) >= _MIN_TERM_LENGTH and raw not in seen:
+            seen.append(raw)
+    return seen
+
+
+def _snap_forward(text: str, index: int) -> int:
+    """Move to the next word boundary so an excerpt does not begin mid-word."""
+    if index <= 0:
+        return 0
+    space = text.find(" ", index)
+    return index if space == -1 else space + 1
+
+
+def _snap_back(text: str, index: int) -> int:
+    if index >= len(text):
+        return len(text)
+    space = text.rfind(" ", 0, index)
+    return index if space == -1 else space
+
+
+def excerpt_around(text: str | None, query: str, limit: int) -> str:
+    """A window of `text` centred on where the query actually matched.
+
+    Search results from Drive and Postgres carry no match highlight - Drive
+    returns no snippet at all, and a KB row hands back a whole column - so
+    without this the excerpt is simply the opening of the document. For
+    anything longer than a paragraph that means the reader is shown text that
+    has nothing to do with why the hit was returned, and a citation invites
+    them to go and look for the relevant part themselves.
+
+    Windows are scored by how many DISTINCT query terms fall inside them, not
+    by raw occurrence count, so a document that repeats one word a hundred
+    times does not outrank the passage where the whole phrase appears.
+
+    Falls back to `truncate` when nothing matches, so this is never worse
+    than showing the opening: a hit whose terms live in the title or in
+    metadata rather than the body still gets its old excerpt.
+    """
+    if not text:
+        return ""
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+
+    terms = _query_terms(query)
+    if not terms:
+        return truncate(collapsed, limit)
+
+    lowered = collapsed.lower()
+    # Every position where any term appears becomes a candidate anchor.
+    anchors = sorted(
+        {match.start() for term in terms for match in re.finditer(re.escape(term), lowered)}
+    )
+    if not anchors:
+        return truncate(collapsed, limit)
+
+    # Rank by distinct terms covered, then by how TIGHTLY they cluster.
+    #
+    # The tie-break is what makes this useful rather than merely correct. A
+    # document that repeats one term before the real passage produces dozens
+    # of anchors that all technically reach the passage at the far edge of
+    # their window; taking the earliest of those opens the excerpt in the
+    # noise and pushes the actual match to the last line. Preferring the
+    # tightest span puts the reader on the passage itself.
+    best_anchor, best_key = anchors[0], (-1, 0)
+    for anchor in anchors:
+        window_end = anchor + limit
+        found = [
+            position
+            for position in (lowered.find(term, anchor, window_end) for term in terms)
+            if position != -1
+        ]
+        if not found:
+            continue
+        key = (len(found), -(max(found) - anchor))
+        if key > best_key:
+            best_anchor, best_key = anchor, key
+
+    start = _snap_forward(collapsed, max(0, best_anchor - _LEAD_IN_CHARS))
+    end = _snap_back(collapsed, min(len(collapsed), start + limit))
+    if end <= start:  # pathological input, e.g. one enormous "word"
+        return truncate(collapsed, limit)
+
+    window = collapsed[start:end].strip()
+    # Ellipses on whichever side was actually cut, so the reader can tell the
+    # excerpt is an interior slice rather than the beginning of the document.
+    return f"{'…' if start > 0 else ''}{window}{'…' if end < len(collapsed) else ''}"
 
 
 def parse_timestamp(value: Any) -> datetime | None:
