@@ -46,7 +46,38 @@ from fastapi.responses import StreamingResponse
 app = FastAPI(title="mock-vllm")
 
 REASONING_TEXT = "Analyzing the request and considering the available context before answering."
-CONTENT_TEXT = "This is a mock completion used for local development against the LLM-Hell agent loop."
+# Deliberately Markdown, with citations. A real model answers in Markdown -
+# headings, lists, bold, code, sometimes a table - so a plain-text stand-in
+# cannot exercise the answer renderer at all, and the first time anyone points
+# this at a live pod the formatting would be the thing that broke. `[1]`/`[2]`
+# resolve against whatever hits were packed into the prompt; `[9]` is here on
+# purpose to prove an out-of-range citation stays inert text.
+CONTENT_TEXT = """Results are merged with **reciprocal rank fusion**, which deliberately ignores
+each backend's own relevance score [1].
+
+## Why the scores are not comparable
+
+- GitLab returns no score at all
+- Postgres returns whatever the generated `ORDER BY` produced
+- Drive returns Google's own opaque ordering [2]
+
+The only signal that means the same thing everywhere is *position within a
+source's own results*, so each hit contributes:
+
+```python
+score = source_weight / (60 + rank_within_source)
+```
+
+| Source | Excerpt | Lands on the match |
+| --- | --- | --- |
+| GitLab | Matched lines | Yes |
+| Postgres | Window around the match | Row, then passage |
+
+> A citation the model invents, like [9], stays plain text - it resolves to no
+> hit that was in the prompt.
+
+This is a mock completion used for local development against the LLM-Hell
+agent loop."""
 
 CANNED_PLAN = json.dumps(
     [

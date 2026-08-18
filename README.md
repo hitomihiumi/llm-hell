@@ -32,9 +32,12 @@ into one shape, fuses the rankings, and streams the answer back over SSE.
 - **Federated search** with a deep link on every hit: a Drive/Gmail
   permalink, a GitLab blob URL with a line anchor, or an internal record page
   for a database row.
-- **A cited answer.** Every `[n]` in the answer is resolved against the hits
-  that were actually in the prompt; a number the model invented is dropped
-  and counted, never rendered as a link.
+- **A cited answer, rendered as Markdown.** Models answer in Markdown, so
+  headings, lists, tables and code blocks are set in the same type system the
+  Borzo site uses for its writing. Every `[n]` is resolved against the hits
+  that were actually in the prompt — including inside a list item or a table
+  cell — and a number the model invented is dropped and counted, never
+  rendered as a link.
 - **Per-source honesty.** Each source reports its hit count, latency, and —
   when it failed — why. The Postgres source also shows the SQL it generated
   and whether that came from the model or the deterministic fallback.
@@ -136,9 +139,9 @@ Three things that will otherwise cost you an hour each:
 
 ### Google Workspace
 
-The awkward one: the MCP server is stdio-only, shells out to a separate Rust
-CLI, and needs a browser consent that cannot happen in a container. It is
-behind an opt-in profile for that reason.
+The awkward one: the MCP server is stdio-only, answers in Markdown rather
+than JSON, and needs a browser consent that cannot happen in a container. It
+is behind an opt-in profile for that reason.
 
 ```bash
 docker compose --profile google up -d --build google-mcp

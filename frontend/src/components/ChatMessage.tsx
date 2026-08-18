@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CitedText, jumpToHit } from "@/components/CitedText";
+import { AnswerMarkdown } from "@/components/AnswerMarkdown";
+import { jumpToHit } from "@/components/CitedText";
 import { ResultCard } from "@/components/ResultCard";
 import { SourceBadge } from "@/components/SourceBadge";
 import type { Citation } from "@/lib/types";
@@ -57,13 +58,11 @@ export function ChatMessage({ run }: { run: SearchRun }) {
         )}
 
         {run.answer ? (
-          <div className="text-[15px] leading-[1.75] whitespace-pre-wrap text-white/85">
-            <CitedText
-              text={run.answer}
-              citations={run.citations}
-              onJump={jump}
-            />
-          </div>
+          <AnswerMarkdown
+            text={run.answer}
+            citations={run.citations}
+            onJump={jump}
+          />
         ) : (
           (run.searching || run.streaming) && (
             // <output> is the semantic element for a live result region, so a

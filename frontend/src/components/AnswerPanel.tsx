@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CitedText, jumpToHit } from "@/components/CitedText";
+import { AnswerMarkdown } from "@/components/AnswerMarkdown";
+import { jumpToHit } from "@/components/CitedText";
 import type { Citation } from "@/lib/types";
 
 export function AnswerPanel({
@@ -69,8 +70,8 @@ export function AnswerPanel({
       )}
 
       {text ? (
-        <div className="mt-5 text-[15px] leading-[1.75] whitespace-pre-wrap text-white/85">
-          <CitedText
+        <div className="mt-5">
+          <AnswerMarkdown
             text={text}
             citations={citations}
             onJump={(citation) => jumpToHit(citation.hit_id)}
