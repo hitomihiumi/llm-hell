@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import { ContentViewer } from "@/components/ContentViewer";
 import type { SearchHit } from "@/lib/types";
 
 const KIND_LABEL: Record<string, string> = {
@@ -25,6 +27,7 @@ function formatDate(value: string | null): string | null {
  * hover. No raised grey panel — the border does the separating.
  */
 export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
+  const [viewing, setViewing] = useState(false);
   const date = formatDate(hit.timestamp);
   // Internal record links route inside the app; everything else is an
   // external permalink and opens in a new tab.
@@ -84,7 +87,22 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
         <span>{hit.source}</span>
         {hit.author && <span>{hit.author}</span>}
         {date && <span>{date}</span>}
+
+        {/* Reading the source without leaving the results. The excerpt above
+            is centred on the match and cut to 400 characters, which answers
+            "is this relevant" and not "what does it say". */}
+        <button
+          type="button"
+          onClick={() => setViewing(true)}
+          className="ml-auto border border-hairline px-2 py-0.5 text-white/50 transition-colors duration-300 hover:border-white hover:text-white"
+        >
+          View
+        </button>
       </div>
+
+      {viewing && (
+        <ContentViewer hitId={hit.id} onClose={() => setViewing(false)} />
+      )}
 
       <span
         aria-hidden="true"

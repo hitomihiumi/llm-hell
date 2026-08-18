@@ -59,6 +59,7 @@ from app.services.mcp.connector import (
     SourceResult,
     excerpt_around,
     parse_timestamp,
+    search_terms,
     truncate,
 )
 from app.services.mcp.transport import (
@@ -77,6 +78,11 @@ SNIPPET_CHARS = 400
 # Both tools cap this at 50 and default to 10.
 MAX_RESULTS = 50
 
+# What the content viewer will show of one document. Generous, since the
+# point is to read it, but still bounded - this crosses the API in one
+# response.
+MAX_CONTENT_CHARS = 200_000
+
 # Which fat tool serves which source, and what a hit from it is.
 _SURFACES: dict[str, dict[str, Any]] = {
     SOURCE_GOOGLE_DRIVE: {"tool": "manage_drive", "kind": "document"},
@@ -90,22 +96,6 @@ def escape_drive_term(text: str) -> str:
     return text.replace("\\", "\\\\").replace("'", "\\'")
 
 
-# Words that would match half of Drive and carry no signal. Kept short and
-# lexical rather than clever: this is a term filter, not a language model.
-_DRIVE_STOPWORDS = frozenset(
-    [
-        # articles, conjunctions, prepositions
-        "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "at",
-        "with", "from", "that", "this", "it", "about",
-        # copulas
-        "is", "are", "was", "were",
-        # question words, which start most of what people type
-        "what", "where", "when", "how", "why", "who",
-        # verbs of asking - present in the question, never in the document
-        "show", "find", "search", "please",
-        "me", "my", "our", "your",
-    ]
-)
 _DRIVE_MAX_TERMS = 4
 
 
@@ -132,10 +122,7 @@ def drive_query(text: str) -> str:
     question is mostly filler; the cap keeps the most specific words, since
     the ones that carry a query are rarely the short ones.
     """
-    words = re.findall(r"[\w'-]{2,}", text or "", re.UNICODE)
-    terms = [word for word in dict.fromkeys(words) if word.lower() not in _DRIVE_STOPWORDS]
-    # Longest first: the specific word in a question is what identifies it.
-    terms = sorted(terms, key=len, reverse=True)[:_DRIVE_MAX_TERMS]
+    terms = search_terms(text, limit=_DRIVE_MAX_TERMS)
 
     if not terms:
         # Nothing usable was left - fall back to the raw text rather than
@@ -689,3 +676,33 @@ class GoogleWorkspaceConnector:
                 hit.snippet = excerpt_around(body, query, SNIPPET_CHARS)
                 enriched += 1
         return enriched
+
+    async def fetch_content(self, hit_id: str) -> dict[str, Any] | None:
+        """A document's whole text, for the viewer.
+
+        Reuses the same `manage_docs` read that enrichment uses - the
+        difference is only that nothing is excerpted. Ids are the ones minted
+        in `_to_hits` (`google_drive:<fileId>`), and anything else is refused
+        rather than passed to the server.
+        """
+        prefix, _, file_id = hit_id.partition(":")
+        if prefix != self.key or not file_id:
+            return None
+
+        try:
+            raw = await self._call(
+                "manage_docs", {"email": self._account, "operation": "get", "documentId": file_id}
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the caller as absent
+            logger.info("could not read %s: %s", file_id, summarise_exception(exc))
+            return None
+
+        body = extract_report_body(raw.text)
+        if not body:
+            return None
+        return {
+            "title": file_id,
+            "text": body[:MAX_CONTENT_CHARS],
+            "language": None,
+            "truncated": len(body) > MAX_CONTENT_CHARS,
+        }

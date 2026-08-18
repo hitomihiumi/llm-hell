@@ -324,6 +324,33 @@ class PostgresKbConnector:
 
     # --- single record ----------------------------------------------------
 
+    async def fetch_content(self, hit_id: str) -> dict[str, Any] | None:
+        """The whole row as readable text, for the content viewer.
+
+        Search shows a 400-character excerpt centred on the match, which is
+        enough to judge relevance and not enough to read. This reuses
+        `fetch_record`, so the table whitelist and key escaping that protect
+        the record route protect this too - there is one way into this
+        database and it is that method.
+        """
+        parts = hit_id.split(":")
+        if len(parts) != 3 or parts[0] != self.key:
+            return None
+
+        row = await self.fetch_record(parts[1], parts[2])
+        if row is None:
+            return None
+
+        # Rendered rather than dumped as JSON: this is for reading, and a
+        # row's long prose column is the reason anyone opened it.
+        body = "\n\n".join(f"{column}:\n{value}" for column, value in row.items() if value not in (None, ""))
+        return {
+            "title": f"{parts[1]} #{parts[2]}",
+            "text": body,
+            "language": None,
+            "truncated": False,
+        }
+
     async def fetch_record(self, table: str, pk: str) -> dict[str, Any] | None:
         """Back the synthesised row links.
 

@@ -33,7 +33,14 @@ from urllib.parse import urlsplit, urlunsplit
 from app.core.config import Settings
 from app.models.source import Source
 from app.schemas.search import SearchHit
-from app.services.mcp.connector import SearchContext, SourceResult, parse_timestamp, truncate
+from app.services.mcp.connector import (
+    SearchContext,
+    SourceResult,
+    excerpt_around,
+    parse_timestamp,
+    search_terms,
+    truncate,
+)
 from app.services.mcp.transport import (
     McpError,
     call_tool,
@@ -49,6 +56,24 @@ SNIPPET_CHARS = 400
 # separate API round-trip, so this is a latency budget, not a limit on how
 # much GitLab can hold.
 MAX_DISCOVERED_PROJECTS = 10
+
+# Project search runs once per term, so this is a round-trip budget. Three
+# covers "the auth-service readme" without turning a long question into a
+# storm of calls.
+_REPO_SEARCH_TERMS = 3
+
+# A project hit's snippet is its description, which is usually one line and
+# often empty - nothing an answer can quote. The README is what a person
+# means by "what is this repository", so the top few project hits get theirs
+# fetched, exactly as Drive hits get their document text.
+README_CANDIDATES = ("README.md", "readme.md", "README", "README.rst", "docs/README.md")
+MAX_README_ENRICHED = 3
+README_CHARS = 4000
+
+# What the viewer will show. Generous - the point is to read the file - but
+# still a cap: a multi-megabyte lockfile helps nobody and would be shipped
+# through the API in one response.
+MAX_CONTENT_CHARS = 200_000
 
 
 class GitLabConnector:
@@ -143,6 +168,16 @@ class GitLabConnector:
             hit.rank_in_source = rank
         result.hits = hits[:limit]
 
+        # A project's description is one line at best, so an answer citing a
+        # repository has its name and nothing to quote. The README is what a
+        # person means by "what is this repository".
+        readmes = 0
+        try:
+            async with http_session(self._settings.gitlab_mcp_url, self._headers) as session:
+                readmes = await self._enrich_readmes(session, result.hits, query=query)
+        except Exception as exc:  # noqa: BLE001 - enrichment is a bonus, never the result
+            logger.info("README enrichment skipped: %s", summarise_exception(exc))
+
         errors = [error for error in (code_error, repo_error) if error]
         if errors and not hits:
             result.error = "; ".join(errors)
@@ -153,6 +188,7 @@ class GitLabConnector:
             "code_mode": mode,
             "code_hits": len(code_hits),
             "repository_hits": len(repo_hits),
+            "readmes_read": readmes,
             "errors": errors,
         }
         result.elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -161,17 +197,47 @@ class GitLabConnector:
     async def _search_repositories(
         self, session, query: str, *, limit: int, ctx: SearchContext
     ) -> tuple[list[SearchHit], str | None]:
-        try:
-            raw = await call_tool(
-                session,
-                "search_repositories",
-                {"search": query},
-                timeout=self._settings.mcp_call_timeout_seconds,
-            )
-        except McpError as exc:
-            return [], f"search_repositories: {exc}"
+        """Project search, once per term rather than once per question.
 
-        items = self._items(raw.payload(source=self.key, tool="search_repositories"))
+        GitLab's `search` is a single literal string matched against name,
+        path and description. A whole sentence therefore matches nothing:
+        `auth-service` found the project, `auth-service readme` found zero.
+        Searching each term separately and merging is what makes a natural
+        question work, and the call count is bounded by the term cap.
+        """
+        terms = search_terms(query, limit=_REPO_SEARCH_TERMS) or [query]
+
+        items: list[Any] = []
+        seen_projects: set[str] = set()
+        errors: list[str] = []
+        for term in terms:
+            try:
+                raw = await call_tool(
+                    session,
+                    "search_repositories",
+                    {"search": term},
+                    timeout=self._settings.mcp_call_timeout_seconds,
+                )
+            except McpError as exc:
+                errors.append(f"search_repositories({term}): {exc}")
+                continue
+            for project in self._items(raw.payload(source=self.key, tool="search_repositories")):
+                # Terms overlap - "auth" and "service" both return
+                # auth-service - so the same project arrives more than once.
+                identity = str(project.get("id") or project.get("path_with_namespace") or "") if isinstance(project, dict) else ""
+                if identity and identity in seen_projects:
+                    continue
+                if identity:
+                    seen_projects.add(identity)
+                items.append(project)
+            if len(items) >= limit:
+                break
+
+        # Every term failing is an error; some failing is not, because the
+        # remaining terms still produced results.
+        if errors and not items:
+            return [], "; ".join(errors)
+
         hits: list[SearchHit] = []
         for project in items:
             if not isinstance(project, dict):
@@ -199,11 +265,19 @@ class GitLabConnector:
     async def _search_code(
         self, session, query: str, *, limit: int, ctx: SearchContext
     ) -> tuple[list[SearchHit], str | None, str]:
-        """Instance-wide when the instance supports it, per-project otherwise."""
+        """Instance-wide when the instance supports it, per-project otherwise.
+
+        One term, not the question. Blob search matches a literal string, and
+        unlike project search this runs once per project, so trying every
+        term would multiply an already per-project fan-out. The most
+        distinctive word is the one worth spending those calls on.
+        """
+        term = (search_terms(query, limit=1) or [query])[0]
+
         if self._instance_search_works is not False:
             try:
                 raw = await call_tool(
-                    session, "search_code", {"search": query}, timeout=self._settings.mcp_call_timeout_seconds
+                    session, "search_code", {"search": term}, timeout=self._settings.mcp_call_timeout_seconds
                 )
             except McpError as exc:
                 # CE answers `400 scope does not have a valid value`. Record
@@ -223,7 +297,7 @@ class GitLabConnector:
             return await call_tool(
                 session,
                 "search_project_code",
-                {"project_id": project_id, "search": query},
+                {"project_id": project_id, "search": term},
                 timeout=self._settings.mcp_call_timeout_seconds,
             )
 
@@ -243,6 +317,114 @@ class GitLabConnector:
 
         hits = await self._blobs_to_hits(session, blobs, ctx=ctx)
         return hits, ("; ".join(errors) if errors and not hits else None), "per_project"
+
+    # --- reading files ----------------------------------------------------
+
+    async def read_file(self, session, project: str, path: str, *, ref: str | None = None) -> str | None:
+        """One file's text, or None if it is not there or is not text.
+
+        `get_file_contents` answers with a JSON object whose `content` is
+        plain text when `encoding` is utf8 and base64 otherwise. A binary
+        file has no useful text form, so it is reported as absent rather than
+        decoded into mojibake.
+        """
+        arguments: dict[str, Any] = {"project_id": project, "file_path": path}
+        if ref:
+            arguments["ref"] = ref
+        try:
+            raw = await call_tool(
+                session, "get_file_contents", arguments, timeout=self._settings.mcp_call_timeout_seconds
+            )
+        except McpError:
+            # A missing file is the normal case when probing README
+            # candidates, so this is not worth a log line per attempt.
+            return None
+
+        payload = raw.payload(source=self.key, tool="get_file_contents")
+        if not isinstance(payload, dict):
+            return None
+        if str(payload.get("encoding") or "").lower() not in ("", "utf8", "utf-8", "text"):
+            return None
+        content = payload.get("content")
+        return content if isinstance(content, str) else None
+
+    async def _read_readme(self, session, project: str) -> str | None:
+        """The first README that exists, trying the usual spellings.
+
+        The server has no "give me the README" call, and the file name is a
+        convention rather than a rule, so the candidates are tried in turn.
+        """
+        for candidate in README_CANDIDATES:
+            text = await self.read_file(session, project, candidate)
+            if text:
+                return text
+        return None
+
+    async def _enrich_readmes(self, session, hits: list[SearchHit], *, query: str) -> int:
+        """Give repository hits something to quote. Returns how many were read.
+
+        Bounded to the top few: each README is a round-trip, and a hit far
+        enough down the list to be worth reading is worth opening instead.
+        """
+        read = 0
+        for hit in hits:
+            if read >= MAX_README_ENRICHED:
+                break
+            if hit.kind != "repository":
+                continue
+            text = await self._read_readme(session, hit.title)
+            if not text:
+                continue
+            # Centred on the match rather than the opening, so a term found
+            # halfway down a long README is visible in the card.
+            hit.snippet = excerpt_around(text, query, SNIPPET_CHARS)
+            read += 1
+        return read
+
+    async def fetch_content(self, hit_id: str) -> dict[str, Any] | None:
+        """Full text behind a hit, for the content viewer.
+
+        Ids are the ones this connector minted in `search`:
+        `gitlab:project:<id>` and `gitlab:code:<project>:<path>:<line>`.
+        Anything else is refused rather than interpreted - the id decides
+        which file is read, so it is not a place to be generous.
+        """
+        parts = hit_id.split(":")
+        if len(parts) < 3 or parts[0] != self.key:
+            return None
+
+        async with http_session(self._settings.gitlab_mcp_url, self._headers) as session:
+            if parts[1] == "project":
+                project = self._project_paths.get(parts[2], parts[2])
+                text = await self._read_readme(session, project)
+                if text is None:
+                    return None
+                return {
+                    "title": f"{project} — README",
+                    "text": text[:MAX_CONTENT_CHARS],
+                    "language": "markdown",
+                    "truncated": len(text) > MAX_CONTENT_CHARS,
+                }
+
+            if parts[1] == "code":
+                # `gitlab:code:<project>:<path>:<line>` - the path may itself
+                # contain colons, so the line is taken off the end and the
+                # project off the front, and whatever remains is the path.
+                if len(parts) < 5:
+                    return None
+                project = self._project_paths.get(parts[2], parts[2])
+                path = ":".join(parts[3:-1])
+                text = await self.read_file(session, project, path)
+                if text is None:
+                    return None
+                return {
+                    "title": f"{project}/{path}",
+                    "text": text[:MAX_CONTENT_CHARS],
+                    "language": None,
+                    "truncated": len(text) > MAX_CONTENT_CHARS,
+                }
+
+        return None
 
     async def _discover_projects(self, session) -> list[str]:
         try:

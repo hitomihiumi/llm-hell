@@ -119,6 +119,50 @@ def _query_terms(query: str) -> list[str]:
     return seen
 
 
+# Words that appear in the question and never in the document. Kept lexical
+# rather than clever - this is a term filter, not a language model - and
+# deliberately short: over-filtering loses the word that identifies the
+# search, which is worse than passing one filler word through.
+STOPWORDS = frozenset(
+    [
+        # articles, conjunctions, prepositions
+        "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "at",
+        "with", "from", "that", "this", "it", "about", "into",
+        # copulas and auxiliaries
+        "is", "are", "was", "were", "does", "do", "can", "should", "would",
+        # question words, which begin most of what a person types
+        "what", "where", "when", "how", "why", "who", "which",
+        # verbs of asking - present in the question, absent from the answer
+        "show", "find", "search", "list", "tell", "give", "please", "look",
+        "me", "my", "our", "your", "using", "named", "called",
+    ]
+)
+
+DEFAULT_MAX_TERMS = 4
+
+
+def search_terms(query: str, *, limit: int = DEFAULT_MAX_TERMS) -> list[str]:
+    """The words in a question worth sending to a search backend.
+
+    Every source this talks to treats its query as a literal string, so a
+    whole sentence finds nothing at all. `auth-service` returned two GitLab
+    hits while `auth-service readme` returned zero, and a Drive document
+    plainly titled TEST did not match `fullText contains 'test document'`.
+    In both cases the source looked empty when it was merely being asked a
+    question no backend could match.
+
+    Ordered longest first, because the word that identifies a search is
+    rarely a short one, and capped because a long question is mostly filler
+    and every extra term costs either query length or a round-trip.
+
+    Original casing is preserved - some backends match case-sensitively on
+    identifiers - while the stopword test is case-insensitive.
+    """
+    words = re.findall(r"[\w'-]{2,}", query or "", re.UNICODE)
+    kept = [word for word in dict.fromkeys(words) if word.lower() not in STOPWORDS]
+    return sorted(kept, key=len, reverse=True)[:limit]
+
+
 def _snap_forward(text: str, index: int) -> int:
     """Move to the next word boundary so an excerpt does not begin mid-word."""
     if index <= 0:

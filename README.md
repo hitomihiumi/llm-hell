@@ -38,6 +38,10 @@ into one shape, fuses the rankings, and streams the answer back over SSE.
   that were actually in the prompt — including inside a list item or a table
   cell — and a number the model invented is dropped and counted, never
   rendered as a link.
+- **Read the source without leaving.** A card shows a 400-character excerpt
+  centred on the match, which answers "is this relevant" and not "what does
+  it say". **View** opens the whole thing — a GitLab README rendered as
+  Markdown, a source file in monospace, a database row as its columns.
 - **Per-source honesty.** Each source reports its hit count, latency, and —
   when it failed — why. The Postgres source also shows the SQL it generated
   and whether that came from the model or the deterministic fallback.
