@@ -1,60 +1,171 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --surface: #f7f7f8;
-  --border: #e4e4e7;
-  --foreground: #18181b;
-  --muted: #71717a;
-  --accent: #4f46e5;
-  --accent-soft: #eef2ff;
-  --danger: #b91c1c;
-  --danger-soft: #fef2f2;
-}
+/*
+ * Design tokens ported from the Borzo marketing site (C:\DEV\borzo-site) so
+ * the demo reads as the same product.
+ *
+ * Deliberately black-only. The site commits to a single dark look with no
+ * `prefers-color-scheme` branch, and a demo that flipped to white on half the
+ * machines it was shown on would not look like the same company. That also
+ * removes the whole class of "which theme is this token defined in" bugs.
+ *
+ * The one structural idea to preserve when adding anything: separation comes
+ * from HAIRLINES, not from raised grey panels. There is no "surface" colour -
+ * a card is black with a 14%-white rule around it.
+ */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0b0b0f;
-    --surface: #17171c;
-    --border: #2a2a33;
-    --foreground: #ededf0;
-    --muted: #9b9ba5;
-    --accent: #a5b4fc;
-    --accent-soft: #1e1b34;
-    --danger: #f87171;
-    --danger-soft: #2a1416;
-  }
+:root {
+  --background: #000000;
+  --foreground: #ffffff;
+  --muted: #8b929c;
+  --hairline: rgb(255 255 255 / 0.14);
+  --accent: #4b9fd5;
+
+  /* App-only additions. The marketing site never has to render a failure,
+     so it has no danger colour; these are tuned to sit in the same family. */
+  --danger: #e0645c;
+  --danger-soft: rgb(224 100 92 / 0.12);
+  --accent-soft: rgb(75 159 213 / 0.14);
 }
 
 @theme inline {
   --color-background: var(--background);
-  --color-surface: var(--surface);
-  --color-border: var(--border);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
+  --color-hairline: var(--hairline);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-barlow-condensed);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
+
+  --animate-fade-in: fade-in 1s var(--ease-out-expo) both;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-
-/* Applied briefly to a result card when its citation is clicked, so the eye
-   can follow the jump. */
-@keyframes citation-flash {
-  0% {
-    background-color: var(--accent-soft);
+@keyframes fade-in {
+  from {
+    opacity: 0;
   }
-  100% {
-    background-color: transparent;
+  to {
+    opacity: 1;
   }
 }
 
-.citation-flash {
-  animation: citation-flash 1.4s ease-out;
+@layer base {
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: var(--foreground);
+    color: var(--background);
+  }
+
+  /* The site never shows a scrollbar against a light track. */
+  * {
+    scrollbar-color: rgb(255 255 255 / 0.2) transparent;
+  }
+}
+
+@layer components {
+  /*
+   * Scroll reveal, same mechanism as the site: a `.reveal` element is opaque
+   * and offset until `.reveal-in` is added.
+   *
+   * Used far more sparingly here than on the marketing site. Search results
+   * stream in and rearrange, and animating each arrival would fight the
+   * streaming rather than decorate it - so this is for page furniture, not
+   * for result lists.
+   */
+  .reveal {
+    opacity: 0;
+    transform: translate3d(0, var(--reveal-y, 20px), 0);
+    transition:
+      opacity 0.8s var(--ease-out-expo),
+      transform 0.8s var(--ease-out-expo);
+    transition-delay: var(--reveal-delay, 0ms);
+    will-change: opacity, transform;
+  }
+
+  .reveal-in {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  /* Faint engineering grid, lifted from the site's media placeholder. Used
+     behind the login panel and the empty chat state so a mostly-black screen
+     still has some depth. */
+  .media-grid {
+    background-image:
+      linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(70% 60% at 50% 45%, black 0%, transparent 100%);
+  }
+
+  .media-glow {
+    background-image:
+      radial-gradient(
+        110% 80% at 50% -10%,
+        rgb(75 159 213 / 0.18) 0%,
+        transparent 62%
+      ),
+      radial-gradient(
+        70% 55% at 85% 105%,
+        rgb(120 145 180 / 0.1) 0%,
+        transparent 60%
+      );
+  }
+
+  /* Marks the result card a citation points at. Uses the accent rather than a
+     background wash so it reads on pure black. */
+  @keyframes citation-flash {
+    0% {
+      border-color: var(--accent);
+      background-color: var(--accent-soft);
+    }
+    100% {
+      border-color: var(--hairline);
+      background-color: transparent;
+    }
+  }
+
+  .citation-flash {
+    animation: citation-flash 1.6s var(--ease-out-expo);
+  }
+
+  /* The site's shared caption treatment: wide uppercase, quiet. */
+  .eyebrow {
+    font-family: var(--font-display);
+    font-size: 11px;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    color: rgb(255 255 255 / 0.4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }

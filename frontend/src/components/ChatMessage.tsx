@@ -21,27 +21,26 @@ export function ChatMessage({ run }: { run: SearchRun }) {
   const failing = run.status.filter((entry) => !entry.ok);
 
   return (
-    <div className="space-y-4">
-      {/* The question */}
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-accent-soft px-4 py-2.5 text-sm text-foreground">
-          {run.query}
-        </div>
-      </div>
+    <article className="border-t border-hairline pt-8">
+      {/* The question, set as a heading rather than a chat bubble - the site
+          has no bubbles. Not uppercased: these are the user's own words, and
+          shouting them back is both wrong and slightly rude. */}
+      <h2 className="font-display text-2xl leading-tight tracking-tight text-white sm:text-3xl">
+        {run.query}
+      </h2>
 
-      {/* The answer */}
-      <div className="space-y-2">
+      <div className="mt-6">
         {run.reasoning && (
-          <div>
+          <div className="mb-4">
             <button
               type="button"
               onClick={() => setShowReasoning(!showReasoning)}
-              className="text-xs text-muted hover:text-foreground"
+              className="font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white"
             >
-              {showReasoning ? "▴ Hide reasoning" : "▾ Show reasoning"}
+              {showReasoning ? "− Hide reasoning" : "+ Show reasoning"}
             </button>
             {showReasoning && (
-              <pre className="mt-2 max-h-64 overflow-y-auto rounded-lg bg-surface p-3 text-xs whitespace-pre-wrap text-muted">
+              <pre className="mt-3 max-h-64 overflow-y-auto border border-hairline p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-white/45">
                 {run.reasoning}
               </pre>
             )}
@@ -51,14 +50,14 @@ export function ChatMessage({ run }: { run: SearchRun }) {
         {run.error && (
           <p
             role="alert"
-            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+            className="border-l-2 border-danger bg-danger-soft px-4 py-3 text-sm text-danger"
           >
             {run.error}
           </p>
         )}
 
         {run.answer ? (
-          <div className="text-sm leading-relaxed whitespace-pre-wrap">
+          <div className="text-[15px] leading-[1.75] whitespace-pre-wrap text-white/85">
             <CitedText
               text={run.answer}
               citations={run.citations}
@@ -70,25 +69,25 @@ export function ChatMessage({ run }: { run: SearchRun }) {
             // <output> is the semantic element for a live result region, so a
             // screen reader announces this rather than sitting on a div with
             // a label no role supports.
-            <output aria-label="Searching" className="block space-y-2">
-              <div className="h-3 w-3/4 animate-pulse rounded bg-border" />
-              <div className="h-3 w-1/2 animate-pulse rounded bg-border" />
+            <output aria-label="Searching" className="block space-y-3">
+              <span className="block h-px w-3/4 animate-pulse bg-white/15" />
+              <span className="block h-px w-1/2 animate-pulse bg-white/15" />
             </output>
           )
         )}
 
-        {/* Where it came from. Collapsed by default - the point of this
-            layout is the conversation - but never removed, because an answer
+        {/* Where it came from. Collapsed by default — the point of this
+            layout is the conversation — but never removed, because an answer
             without its sources is the thing this app exists not to give. */}
         {!run.searching && (
-          <div className="pt-1">
+          <div className="mt-6">
             <button
               type="button"
               onClick={() => setShowSources(!showSources)}
-              className="text-xs text-muted hover:text-foreground"
+              className="group flex items-center gap-2 font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white"
             >
-              {showSources ? "▴" : "▾"} {run.hits.length}{" "}
-              {run.hits.length === 1 ? "source" : "sources"}
+              <span aria-hidden="true">{showSources ? "−" : "+"}</span>
+              {run.hits.length} {run.hits.length === 1 ? "source" : "sources"}
               {run.hitsUsed !== undefined &&
                 run.hitsDropped !== undefined &&
                 run.hitsDropped > 0 &&
@@ -97,7 +96,7 @@ export function ChatMessage({ run }: { run: SearchRun }) {
             </button>
 
             {showSources && (
-              <div className="mt-3 space-y-3">
+              <div className="mt-4 space-y-4">
                 {run.status.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {run.status.map((entry) => (
@@ -106,7 +105,7 @@ export function ChatMessage({ run }: { run: SearchRun }) {
                   </div>
                 )}
                 {run.hits.length > 0 && (
-                  <ol className="space-y-2">
+                  <ol className="space-y-3">
                     {run.hits.map((hit, index) => (
                       <ResultCard key={hit.id} hit={hit} index={index + 1} />
                     ))}
@@ -117,6 +116,6 @@ export function ChatMessage({ run }: { run: SearchRun }) {
           </div>
         )}
       </div>
-    </div>
+    </article>
   );
 }

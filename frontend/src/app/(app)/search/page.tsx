@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { AnswerPanel } from "@/components/AnswerPanel";
 import { ResultCard } from "@/components/ResultCard";
 import { SourceBadge } from "@/components/SourceBadge";
+import { SpaceButton } from "@/components/SpaceButton";
 import { api } from "@/lib/api";
 import type { Source } from "@/lib/types";
 import { useSearchRun } from "@/lib/useSearch";
+import { cn } from "@/lib/utils";
 
 /**
  * The layout that shows the machinery: per-source timings, the generated SQL,
@@ -57,27 +59,45 @@ export default function SearchPage() {
   const failing = run?.status.filter((entry) => !entry.ok) ?? [];
 
   return (
-    <div className="space-y-6">
-      <form onSubmit={onSubmit} className="space-y-3">
-        <div className="flex gap-2">
+    <div className="space-y-10">
+      <header>
+        <p className="font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
+          Federated search
+        </p>
+        <h1 className="mt-3 font-display text-4xl font-semibold uppercase leading-[0.98] tracking-tight text-white sm:text-5xl">
+          Ask the knowledge base
+        </h1>
+      </header>
+
+      <form onSubmit={onSubmit} className="space-y-6">
+        <div className="flex items-end gap-6 border-b border-hairline pb-1 transition-colors duration-300 focus-within:border-white">
           <input
             value={query}
             onChange={(changeEvent) => setQuery(changeEvent.target.value)}
-            placeholder="Ask a question, or search for a term…"
+            placeholder="Ask a question, or search for a term"
             // biome-ignore lint/a11y/noAutofocus: the sole input on a single-purpose screen; focusing it is what every user wants first
             autoFocus
-            className="flex-1 rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
+            // Display face for scale, but NOT uppercase: text-transform would
+            // show something different from what was typed, which in a field
+            // is disorienting even though the submitted value is unchanged.
+            className="min-w-0 flex-1 bg-transparent py-4 font-display text-2xl tracking-tight text-white outline-none placeholder:text-white/20 sm:text-3xl"
           />
-          <button
+          <SpaceButton
             type="submit"
+            variant="outline"
+            size="sm"
             disabled={run?.searching || !query.trim()}
-            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+            className="mb-3 shrink-0"
           >
-            {run?.searching ? "Searching…" : "Search"}
-          </button>
+            {run?.searching ? "Searching" : "Search"}
+          </SpaceButton>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <span className="font-display text-[10px] uppercase tracking-[0.28em] text-white/30">
+            Sources
+          </span>
+
           {sources.map((source) => {
             const on = selected.has(source.key);
             return (
@@ -86,29 +106,34 @@ export default function SearchPage() {
                 type="button"
                 onClick={() => toggle(source.key)}
                 disabled={!source.enabled}
-                title={
-                  source.enabled
-                    ? undefined
-                    : "This source is switched off by an admin"
-                }
-                className={`rounded-full border px-3 py-1 text-xs transition-colors disabled:opacity-40 ${
-                  on
-                    ? "border-accent bg-accent-soft text-accent"
-                    : "border-border bg-surface text-muted"
-                }`}
+                title={source.enabled ? undefined : "Switched off by an admin"}
+                className={cn(
+                  "group flex items-center gap-2 font-display text-[11px] uppercase tracking-[0.24em] transition-colors duration-300 disabled:opacity-30",
+                  on ? "text-white" : "text-white/40 hover:text-white/70",
+                )}
               >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "h-1.5 w-1.5 border transition-colors duration-300",
+                    on
+                      ? "border-accent bg-accent"
+                      : "border-white/30 bg-transparent",
+                  )}
+                />
                 {source.display_name}
               </button>
             );
           })}
 
-          <label className="ml-auto flex items-center gap-1.5 text-xs text-muted">
+          <label className="ml-auto flex cursor-pointer items-center gap-2 font-display text-[10px] uppercase tracking-[0.24em] text-white/40 transition-colors duration-300 hover:text-white/70">
             <input
               type="checkbox"
               checked={withAnswer}
               onChange={(changeEvent) =>
                 setWithAnswer(changeEvent.target.checked)
               }
+              className="h-3 w-3 accent-[color:var(--accent)]"
             />
             Generate an answer
           </label>
@@ -118,7 +143,7 @@ export default function SearchPage() {
       {error && (
         <p
           role="alert"
-          className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
+          className="border-l-2 border-danger bg-danger-soft px-4 py-3 text-sm text-danger"
         >
           {error}
         </p>
@@ -148,15 +173,20 @@ export default function SearchPage() {
       )}
 
       {run && run.hits.length > 0 ? (
-        <ol className="space-y-3">
-          {run.hits.map((hit, index) => (
-            <ResultCard key={hit.id} hit={hit} index={index + 1} />
-          ))}
-        </ol>
+        <section>
+          <p className="mb-5 font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
+            {run.hits.length} {run.hits.length === 1 ? "Result" : "Results"}
+          </p>
+          <ol className="space-y-4">
+            {run.hits.map((hit, index) => (
+              <ResultCard key={hit.id} hit={hit} index={index + 1} />
+            ))}
+          </ol>
+        </section>
       ) : (
         run &&
         !run.searching && (
-          <p className="text-sm text-muted">
+          <p className="border-t border-hairline pt-6 text-sm text-white/50">
             No results.
             {failing.length > 0 && (
               <>

@@ -14,8 +14,16 @@ export function LogoutButton() {
   }
 
   return (
-    <button type="button" onClick={onClick} className="hover:text-foreground">
+    <button
+      type="button"
+      onClick={onClick}
+      className="group relative font-display text-[11px] uppercase tracking-[0.24em] text-white/50 transition-colors duration-300 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
+    >
       Sign out
+      <span
+        aria-hidden="true"
+        className="absolute -bottom-2 left-0 h-px w-full origin-left scale-x-0 bg-white transition-transform duration-500 ease-out-expo group-hover:scale-x-100"
+      />
     </button>
   );
 }

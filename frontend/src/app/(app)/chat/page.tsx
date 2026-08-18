@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/ChatMessage";
+import { SpaceButton } from "@/components/SpaceButton";
 import { api } from "@/lib/api";
 import type { ChatTurn, Source } from "@/lib/types";
 import { type SearchRun, useSearchRun } from "@/lib/useSearch";
+import { cn } from "@/lib/utils";
 
 const SUGGESTIONS = [
   "How does result ranking work?",
@@ -95,33 +97,52 @@ export default function ChatPage() {
   const empty = runs.length === 0;
 
   return (
-    <div className="flex min-h-[calc(100vh-9rem)] flex-col">
+    <div className="flex min-h-[calc(100vh-11rem)] flex-col">
       {empty ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
-          <div className="space-y-1.5">
-            <h1 className="text-xl font-semibold tracking-tight">
-              Ask the knowledge base
-            </h1>
-            <p className="text-sm text-muted">
-              Answers come from your Drive, GitLab and internal records — with
-              the sources attached.
-            </p>
-          </div>
-          <div className="flex flex-wrap justify-center gap-2">
+        <div className="relative flex flex-1 flex-col items-start justify-center py-16">
+          <div
+            aria-hidden="true"
+            className="media-grid absolute inset-0 -z-10"
+          />
+
+          <p className="font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
+            Knowledge base
+          </p>
+          <h1 className="mt-3 max-w-3xl font-display text-4xl font-semibold uppercase leading-[0.98] tracking-tight text-white sm:text-6xl">
+            Ask anything
+          </h1>
+          <p className="mt-5 max-w-md text-sm leading-relaxed text-white/55">
+            Answers come from your Drive, GitLab and internal records — with the
+            sources attached.
+          </p>
+
+          <div className="mt-10 flex w-full max-w-2xl flex-col border-t border-hairline">
             {SUGGESTIONS.map((suggestion) => (
               <button
                 key={suggestion}
                 type="button"
                 onClick={() => send(suggestion)}
-                className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs text-muted hover:border-accent hover:text-foreground"
+                className="group flex items-center justify-between gap-6 border-b border-hairline py-4 text-left transition-colors duration-300 hover:bg-white/[0.02]"
               >
-                {suggestion}
+                <span className="text-sm text-white/70 transition-transform duration-500 ease-out-expo group-hover:translate-x-1.5 group-hover:text-white">
+                  {suggestion}
+                </span>
+                <svg
+                  viewBox="0 0 24 12"
+                  aria-hidden="true"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.25"
+                  className="h-3 w-6 shrink-0 text-white/30 transition-all duration-500 ease-out-expo group-hover:translate-x-1.5 group-hover:text-white"
+                >
+                  <path d="M0 6h21M17 1.5 21.5 6 17 10.5" />
+                </svg>
               </button>
             ))}
           </div>
         </div>
       ) : (
-        <div className="flex-1 space-y-8 pb-6">
+        <div className="flex-1 space-y-10 pb-8">
           {runs.map((run, index) => (
             <ChatMessage key={`${index}-${run.query}`} run={run} />
           ))}
@@ -130,84 +151,93 @@ export default function ChatPage() {
       )}
 
       {/* Composer, pinned to the bottom of the column. */}
-      <div className="sticky bottom-0 -mx-6 bg-background px-6 pt-3 pb-6">
-        <div className="rounded-2xl border border-border bg-surface p-2">
-          <textarea
-            value={input}
-            onChange={(changeEvent) => setInput(changeEvent.target.value)}
-            onKeyDown={onKeyDown}
-            rows={2}
-            placeholder="Ask a question…  (Enter to send, Shift+Enter for a new line)"
-            className="w-full resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted"
-          />
-          <div className="flex items-center gap-2 px-1">
-            <button
-              type="button"
-              onClick={() => setShowFilters(!showFilters)}
-              className="rounded-md px-2 py-1 text-xs text-muted hover:text-foreground"
-            >
-              {selected.size === sources.length
-                ? "All sources"
-                : `${selected.size} of ${sources.length} sources`}
-            </button>
+      <div className="sticky bottom-0 -mx-6 border-t border-hairline bg-black/90 px-6 pt-4 pb-6 backdrop-blur-md md:-mx-10 md:px-10">
+        <textarea
+          value={input}
+          onChange={(changeEvent) => setInput(changeEvent.target.value)}
+          onKeyDown={onKeyDown}
+          rows={2}
+          placeholder="Ask a question…  (Enter to send, Shift+Enter for a new line)"
+          className="w-full resize-none border-b border-hairline bg-transparent py-3 text-[15px] text-white outline-none transition-colors duration-300 placeholder:text-white/25 focus:border-white"
+        />
 
-            <div className="ml-auto flex items-center gap-2">
-              {busy && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    cancel();
-                    setBusy(false);
-                  }}
-                  className="rounded-md border border-border px-2.5 py-1 text-xs text-muted hover:text-foreground"
-                >
-                  Stop
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => send(input)}
-                disabled={busy || !input.trim()}
-                className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+        <div className="mt-3 flex items-center gap-4">
+          <button
+            type="button"
+            onClick={() => setShowFilters(!showFilters)}
+            className="font-display text-[10px] uppercase tracking-[0.24em] text-white/40 transition-colors duration-300 hover:text-white"
+          >
+            {selected.size === sources.length
+              ? "All sources"
+              : `${selected.size} of ${sources.length} sources`}
+          </button>
+
+          <div className="ml-auto flex items-center gap-3">
+            {busy && (
+              <SpaceButton
+                variant="ghost"
+                size="sm"
+                withArrow={false}
+                onClick={() => {
+                  cancel();
+                  setBusy(false);
+                }}
+                className="border-hairline text-white/60"
               >
-                Send
-              </button>
-            </div>
+                Stop
+              </SpaceButton>
+            )}
+            <SpaceButton
+              variant="solid"
+              size="sm"
+              onClick={() => send(input)}
+              disabled={busy || !input.trim()}
+            >
+              Send
+            </SpaceButton>
           </div>
-
-          {showFilters && (
-            <div className="flex flex-wrap gap-2 border-t border-border px-1 pt-2">
-              {sources.map((source) => {
-                const on = selected.has(source.key);
-                return (
-                  <button
-                    key={source.key}
-                    type="button"
-                    disabled={!source.enabled}
-                    title={
-                      source.enabled ? undefined : "Switched off by an admin"
-                    }
-                    onClick={() =>
-                      setSelected((current) => {
-                        const next = new Set(current);
-                        if (next.has(source.key)) next.delete(source.key);
-                        else next.add(source.key);
-                        return next;
-                      })
-                    }
-                    className={`rounded-full border px-2.5 py-1 text-xs disabled:opacity-40 ${
-                      on
-                        ? "border-accent bg-accent-soft text-accent"
-                        : "border-border text-muted"
-                    }`}
-                  >
-                    {source.display_name}
-                  </button>
-                );
-              })}
-            </div>
-          )}
         </div>
+
+        {showFilters && (
+          <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-hairline pt-4">
+            {sources.map((source) => {
+              const on = selected.has(source.key);
+              return (
+                <button
+                  key={source.key}
+                  type="button"
+                  disabled={!source.enabled}
+                  title={
+                    source.enabled ? undefined : "Switched off by an admin"
+                  }
+                  onClick={() =>
+                    setSelected((current) => {
+                      const next = new Set(current);
+                      if (next.has(source.key)) next.delete(source.key);
+                      else next.add(source.key);
+                      return next;
+                    })
+                  }
+                  className={cn(
+                    "flex items-center gap-2 font-display text-[11px] uppercase tracking-[0.24em] transition-colors duration-300 disabled:opacity-30",
+                    on ? "text-white" : "text-white/40 hover:text-white/70",
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "h-1.5 w-1.5 border transition-colors duration-300",
+                      on
+                        ? "border-accent bg-accent"
+                        : "border-white/30 bg-transparent",
+                    )}
+                  />
+                  {source.display_name}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

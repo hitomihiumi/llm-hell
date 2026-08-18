@@ -26,13 +26,30 @@ export default async function RecordPage({
     { headers: { cookie: header }, cache: "no-store" },
   );
 
+  const backLink = (
+    <Link
+      href="/search"
+      className="group inline-flex items-center gap-3 font-display text-[11px] uppercase tracking-[0.24em] text-white/50 transition-colors duration-300 hover:text-white"
+    >
+      <svg
+        viewBox="0 0 24 12"
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        className="h-3 w-6 rotate-180 transition-transform duration-500 ease-out-expo group-hover:-translate-x-1.5"
+      >
+        <path d="M0 6h21M17 1.5 21.5 6 17 10.5" />
+      </svg>
+      Back to search
+    </Link>
+  );
+
   if (!response.ok) {
     return (
-      <div className="space-y-3">
-        <Link href="/search" className="text-sm text-accent hover:underline">
-          ← Back to search
-        </Link>
-        <p className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
+      <div className="space-y-6">
+        {backLink}
+        <p className="border-l-2 border-danger bg-danger-soft px-4 py-3 text-sm text-danger">
           {response.status === 404
             ? "That record does not exist, or its table is not searchable."
             : "The knowledge base could not be reached."}
@@ -44,30 +61,31 @@ export default async function RecordPage({
   const record = (await response.json()) as RecordOut;
 
   return (
-    <div className="space-y-4">
-      <Link href="/search" className="text-sm text-accent hover:underline">
-        ← Back to search
-      </Link>
+    <div className="space-y-8">
+      {backLink}
 
-      <header>
-        <h1 className="text-lg font-semibold">
-          {String(record.fields.title ?? `${record.table} #${record.pk}`)}
-        </h1>
-        <p className="text-xs text-muted">
+      <header className="border-b border-hairline pb-6">
+        <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/35">
           {record.table} · id {record.pk}
         </p>
+        {/* The record's own title is data, so it keeps its casing. */}
+        <h1 className="mt-3 font-display text-3xl font-semibold leading-[1] tracking-tight text-white sm:text-4xl">
+          {String(record.fields.title ?? `${record.table} #${record.pk}`)}
+        </h1>
       </header>
 
-      <dl className="divide-y divide-border rounded-lg border border-border bg-surface">
+      <dl className="border-t border-hairline">
         {Object.entries(record.fields).map(([name, value]) => (
           <div
             key={name}
-            className="grid grid-cols-[10rem_1fr] gap-4 px-4 py-3 text-sm"
+            className="grid gap-2 border-b border-hairline py-5 sm:grid-cols-[12rem_1fr] sm:gap-8"
           >
-            <dt className="text-muted">{name}</dt>
-            <dd className="whitespace-pre-wrap break-words">
+            <dt className="font-display text-[10px] uppercase tracking-[0.28em] text-white/35">
+              {name}
+            </dt>
+            <dd className="text-sm leading-relaxed break-words whitespace-pre-wrap text-white/75">
               {value === null ? (
-                <span className="text-muted">—</span>
+                <span className="text-white/25">—</span>
               ) : (
                 String(value)
               )}

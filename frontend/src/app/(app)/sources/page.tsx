@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { SpaceButton } from "@/components/SpaceButton";
 import { ApiError, api } from "@/lib/api";
 import type { Source } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 interface HealthOut {
   key: string;
@@ -67,10 +69,15 @@ export default function SourcesPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-10">
       <header>
-        <h1 className="text-lg font-semibold">Sources</h1>
-        <p className="text-sm text-muted">
+        <p className="font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
+          Configuration
+        </p>
+        <h1 className="mt-3 font-display text-4xl font-semibold uppercase leading-[0.98] tracking-tight text-white sm:text-5xl">
+          Sources
+        </h1>
+        <p className="mt-4 max-w-xl text-sm leading-relaxed text-white/55">
           What a source can actually do is not knowable from configuration —
           whether a GitLab instance supports code search, for instance. Run a
           check to ask its server directly.
@@ -80,13 +87,15 @@ export default function SourcesPage() {
       {notice && (
         <p
           role="alert"
-          className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"
+          className="border-l-2 border-danger bg-danger-soft px-4 py-3 text-sm text-danger"
         >
           {notice}
         </p>
       )}
 
-      <ul className="space-y-3">
+      {/* One row per source, in the site's stacked-rule style rather than as
+          separate cards — these are a list of settings, not a gallery. */}
+      <ul className="border-t border-hairline">
         {sources.map((source) => {
           const latest =
             health[source.key]?.result ?? source.last_check_result ?? null;
@@ -96,73 +105,88 @@ export default function SourcesPage() {
           const ok = latest ? Boolean(latest.ok) : null;
 
           return (
-            <li
-              key={source.key}
-              className="rounded-lg border border-border bg-surface p-4"
-            >
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="font-medium">{source.display_name}</span>
-                <span className="text-xs text-muted">{source.kind}</span>
+            <li key={source.key} className="border-b border-hairline py-6">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
                 <span
-                  className={`rounded px-1.5 py-0.5 text-xs ${
-                    source.enabled
-                      ? "bg-accent-soft text-accent"
-                      : "bg-background text-muted"
-                  }`}
+                  aria-hidden="true"
+                  className={cn(
+                    "h-1.5 w-1.5",
+                    source.enabled ? "bg-accent" : "bg-white/20",
+                  )}
+                />
+
+                <h2 className="font-display text-2xl uppercase tracking-tight text-white">
+                  {source.display_name}
+                </h2>
+
+                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">
+                  {source.kind}
+                </span>
+                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">
+                  weight {source.weight}
+                </span>
+                <span
+                  className={cn(
+                    "font-mono text-[10px] uppercase tracking-[0.2em]",
+                    source.enabled ? "text-white/60" : "text-white/30",
+                  )}
                 >
                   {source.enabled ? "enabled" : "disabled"}
                 </span>
-                <span className="text-xs text-muted">
-                  weight {source.weight}
-                </span>
 
-                <div className="ml-auto flex gap-2">
-                  <button
-                    type="button"
+                <div className="ml-auto flex gap-3">
+                  <SpaceButton
+                    variant="ghost"
+                    size="sm"
+                    withArrow={false}
                     onClick={() => toggle(source)}
-                    className="rounded-md border border-border px-2.5 py-1 text-xs hover:border-accent"
+                    className="border-hairline text-white/70"
                   >
                     {source.enabled ? "Disable" : "Enable"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => check(source.key)}
+                  </SpaceButton>
+                  <SpaceButton
+                    variant="outline"
+                    size="sm"
+                    withArrow={false}
                     disabled={checking === source.key}
-                    className="rounded-md border border-border px-2.5 py-1 text-xs hover:border-accent disabled:opacity-60"
+                    onClick={() => check(source.key)}
                   >
-                    {checking === source.key ? "Checking…" : "Check"}
-                  </button>
+                    {checking === source.key ? "Checking" : "Check"}
+                  </SpaceButton>
                 </div>
               </div>
 
               {latest && (
-                <div className="mt-3 space-y-1.5 border-t border-border pt-3 text-xs">
-                  <p>
+                <div className="mt-4 space-y-2 pl-6">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.2em]">
                     <span className={ok ? "text-accent" : "text-danger"}>
                       {ok ? "reachable" : "unreachable"}
                     </span>
                     {source.last_checked_at && (
-                      <span className="text-muted">
-                        {" "}
-                        · checked{" "}
+                      <span className="text-white/30">
+                        {" · checked "}
                         {new Date(source.last_checked_at).toLocaleString()}
                       </span>
                     )}
                   </p>
+
                   {typeof latest.error === "string" && (
-                    <p className="font-mono break-words text-danger">
+                    <p className="font-mono text-[11px] leading-relaxed break-words text-danger">
                       {latest.error}
                     </p>
                   )}
                   {typeof latest.warning === "string" && (
-                    <p className="break-words text-danger">{latest.warning}</p>
+                    <p className="font-mono text-[11px] leading-relaxed break-words text-accent">
+                      {latest.warning}
+                    </p>
                   )}
+
                   {tools && (
-                    <details>
-                      <summary className="cursor-pointer text-muted">
+                    <details className="group">
+                      <summary className="cursor-pointer font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white">
                         {tools.length} tools exposed
                       </summary>
-                      <p className="mt-1 font-mono break-words text-muted">
+                      <p className="mt-2 font-mono text-[11px] leading-relaxed break-words text-white/40">
                         {tools.join(", ")}
                       </p>
                     </details>

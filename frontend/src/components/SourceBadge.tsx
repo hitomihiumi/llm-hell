@@ -2,68 +2,101 @@
 
 import { useState } from "react";
 import type { SourceStatus } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 /**
  * Per-source outcome. Failures are shown, not hidden: a search that quietly
- * returns fewer results because a backend is down is worse than one that
- * says GitLab is unreachable, because the user has no reason to distrust it.
+ * returns fewer results because a backend is down is worse than one that says
+ * GitLab is unreachable, because the user has no reason to distrust it.
+ *
+ * Reads as one of the site's metadata rows — mono, wide uppercase, hairline
+ * separation — with the status carried by a small square rather than by
+ * colouring the whole chip, so a failed source does not shout over the
+ * results themselves.
  */
 export function SourceBadge({ status }: { status: SourceStatus }) {
   const [open, setOpen] = useState(false);
   const sql = typeof status.detail?.sql === "string" ? status.detail.sql : null;
   const mode =
     typeof status.detail?.mode === "string" ? status.detail.mode : null;
-  const expandable = Boolean(status.error || sql);
-
-  const tone = !status.ok
-    ? "border-danger bg-danger-soft text-danger"
-    : status.degraded
-      ? "border-border bg-surface text-foreground"
-      : "border-border bg-surface text-muted";
+  const warning =
+    typeof status.detail?.warning === "string" ? status.detail.warning : null;
+  const expandable = Boolean(status.error || sql || warning);
 
   return (
-    <div className={`rounded-md border px-2.5 py-1.5 text-xs ${tone}`}>
+    <div
+      className={cn(
+        "border border-hairline transition-colors duration-300",
+        !status.ok && "border-danger/40",
+      )}
+    >
       <button
         type="button"
         onClick={() => expandable && setOpen(!open)}
-        className={`flex items-center gap-2 ${expandable ? "cursor-pointer" : "cursor-default"}`}
+        aria-expanded={expandable ? open : undefined}
+        className={cn(
+          "flex items-center gap-3 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em]",
+          expandable ? "cursor-pointer" : "cursor-default",
+        )}
       >
-        <span className="font-medium">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "h-1.5 w-1.5",
+            !status.ok
+              ? "bg-danger"
+              : status.degraded
+                ? "bg-accent"
+                : "bg-white/40",
+          )}
+        />
+        <span className="text-white/80">
           {status.display_name || status.source}
         </span>
+
         {status.ok ? (
-          <span>
+          <span className="text-white/35">
             {status.hits} {status.hits === 1 ? "hit" : "hits"} ·{" "}
             {status.elapsed_ms}ms
           </span>
         ) : (
-          <span>unavailable</span>
+          <span className="text-danger">unavailable</span>
         )}
-        {status.degraded && (
-          <span title="some parts of this source failed">partial</span>
-        )}
+
+        {status.degraded && <span className="text-accent">partial</span>}
         {mode === "fallback" && (
           <span
-            className="rounded bg-accent-soft px-1 text-accent"
+            className="text-accent"
             title="The model did not produce usable SQL, so a deterministic keyword query was used instead."
           >
             fallback
           </span>
         )}
-        {expandable && <span aria-hidden>{open ? "▴" : "▾"}</span>}
+        {expandable && (
+          <span aria-hidden="true" className="text-white/30">
+            {open ? "−" : "+"}
+          </span>
+        )}
       </button>
 
       {open && (
-        <div className="mt-2 space-y-2 border-t border-border pt-2">
+        <div className="space-y-3 border-t border-hairline px-3 py-3">
           {status.error && (
-            <p className="font-mono break-words">{status.error}</p>
+            <p className="font-mono text-[11px] leading-relaxed break-words text-danger">
+              {status.error}
+            </p>
+          )}
+          {warning && (
+            <p className="font-mono text-[11px] leading-relaxed break-words text-accent">
+              {warning}
+            </p>
           )}
           {sql && (
             <div>
-              <p className="mb-1 text-muted">
-                Generated SQL{mode ? ` (${mode})` : ""}:
+              <p className="mb-2 font-display text-[10px] uppercase tracking-[0.28em] text-white/40">
+                Generated SQL{mode ? ` · ${mode}` : ""}
               </p>
-              <pre className="overflow-x-auto rounded bg-background p-2 font-mono text-[11px] whitespace-pre-wrap">
+              <pre className="overflow-x-auto border border-hairline p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-white/70">
                 {sql}
               </pre>
             </div>

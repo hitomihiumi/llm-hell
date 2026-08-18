@@ -40,7 +40,7 @@ export function CitedText({
           type="button"
           onClick={() => onJump(citation)}
           title={`${citation.source}: ${citation.title}`}
-          className="mx-0.5 rounded bg-accent-soft px-1 align-baseline text-[11px] font-medium text-accent hover:underline"
+          className="mx-0.5 border-b border-accent/50 font-mono text-[11px] align-baseline text-accent transition-colors duration-300 hover:border-accent hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
         >
           {match[1]}
         </button>
