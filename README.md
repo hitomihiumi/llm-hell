@@ -85,7 +85,9 @@ reports why on the **Sources** page rather than disappearing.
 ### Postgres knowledge base — works out of the box
 
 `docker/postgres/initdb/` creates a separate `kb` database, a read-only
-`kb_ro` role, and a small demo corpus.
+`kb_ro` role, and a 50-row demo corpus across four tables. Full runbook:
+**[docs/test-database.md](docs/test-database.md)** — bringing it up, adding
+your own tables, and proving the read-only boundary holds.
 
 Searching it means asking the model to write a `SELECT`. That path has four
 layers of protection, and **only the last two matter**:
@@ -106,9 +108,9 @@ docker compose exec -e PGPASSWORD=kb_ro_password postgres \
 # ERROR: relation "users" does not exist
 ```
 
-> The initdb scripts only run on an **empty** volume. On an existing stack,
-> pipe them through `psql` by hand — the header of `01-create-kb.sql` has the
-> command.
+> The initdb scripts only run on an **empty** volume. On an existing stack
+> they are skipped silently, and the source reports that the tables do not
+> exist. Apply them by hand — see [docs/test-database.md](docs/test-database.md).
 
 ### GitLab
 
@@ -248,7 +250,7 @@ docker/
   google-mcp/          the stdio->HTTP bridged Google server
   postgres/initdb/     kb database, kb_ro role, demo corpus
 tools/mcp_probe.py     standalone MCP prober
-docs/                  spike findings, Google runbook, proxy notes
+docs/                  spike findings, Google runbook, test-database runbook, proxy notes
 ```
 
 All code, comments and developer docs are in English.

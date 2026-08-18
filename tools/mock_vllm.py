@@ -35,6 +35,7 @@ Run directly: `python mock_vllm.py` (defaults to 0.0.0.0:8000).
 """
 
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -111,11 +112,113 @@ def _wants_json_protocol_tool_call(body: dict[str, Any]) -> bool:
     return any("```tool_call" in (m.get("content") or "") for m in body.get("messages", []))
 
 
+# --- text2sql -------------------------------------------------------------
+#
+# Without this the mock answers every prompt with prose, so `parse_generated`
+# rejects it and the Postgres source silently runs its deterministic
+# fallback - which searches only the first configured table. The seeded
+# corpus has four, so three of them were unreachable in the dev stack and
+# the UI could never show `mode: llm` at all. This is the one prompt in the
+# service whose reply has to be machine-readable, so it is the one the mock
+# has to actually understand.
+
+# Matches the system prompt in services/search/text2sql.py. Kept as a phrase
+# rather than a sentinel because it is the instruction itself: if that
+# wording is rewritten, this should stop matching and be updated with it.
+_SQL_MARKER = "ONE PostgreSQL SELECT statement"
+
+# Rendered by the connector as `table(col type, col type)`.
+_SCHEMA_LINE = re.compile(r"^(\w+)\(([^)]*)\)$", re.MULTILINE)
+
+# Which table a question is about. First hit wins, so the order is the
+# priority order; anything unmatched falls through to the first table.
+_TABLE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("tickets", ("error", "fail", "broken", "bug", "crash", "hang", "wrong", "ticket", "incident")),
+    ("runbooks", ("how do i", "steps", "runbook", "restart", "rotate", "recover", "bring up", "verify")),
+    ("decisions", ("decision", "why did we", "instead of", "rejected", "considered", "chose", "trade-off")),
+)
+
+_STOPWORDS = frozenset(
+    "the a an and or but how why what when does do is are was were of for to in on at "
+    "with from that this it its we our you your can could should would if then than".split()
+)
+
+_TIMESTAMPS = ("updated_at", "created_at", "decided_at", "occurred_at")
+_AUTHORS = ("author", "reporter", "owner", "decided_by")
+
+
+def _wants_sql(body: dict[str, Any]) -> bool:
+    return any(_SQL_MARKER in (m.get("content") or "") for m in body.get("messages", []))
+
+
+def _schema_from_prompt(body: dict[str, Any]) -> dict[str, list[str]]:
+    system = "\n".join(m.get("content") or "" for m in body.get("messages", []) if m.get("role") == "system")
+    return {
+        match.group(1): [column.strip().split(" ")[0] for column in match.group(2).split(",") if column.strip()]
+        for match in _SCHEMA_LINE.finditer(system)
+    }
+
+
+def _terms(question: str) -> list[str]:
+    """The words worth matching on.
+
+    A real model extracts keywords; searching for the whole question as one
+    ILIKE pattern matches nothing, which would make the mock look like it
+    works while returning an empty table every time.
+    """
+    words = [word for word in re.findall(r"[A-Za-z0-9_.-]{3,}", question.lower()) if word not in _STOPWORDS]
+    # Longest first: the specific word in a question carries it.
+    return sorted(dict.fromkeys(words), key=len, reverse=True)[:3] or [question.strip()[:40]]
+
+
+def _sql_response(body: dict[str, Any]) -> str:
+    schema = _schema_from_prompt(body)
+    question = next(
+        (m.get("content") or "" for m in reversed(body.get("messages", [])) if m.get("role") == "user"),
+        "",
+    )
+
+    tables = list(schema) or ["articles"]
+    lowered = question.lower()
+    table = next(
+        (name for name, hints in _TABLE_HINTS if name in tables and any(h in lowered for h in hints)),
+        tables[0],
+    )
+
+    columns = schema.get(table, ["id", "title", "body"])
+    timestamp = next((c for c in _TIMESTAMPS if c in columns), None)
+    author = next((c for c in _AUTHORS if c in columns), None)
+    snippet = "body" if "body" in columns else columns[-1]
+
+    matched = ["title", snippet] if "title" in columns else [snippet]
+    where = " OR ".join(
+        f"{column} ILIKE '%{term.replace(chr(39), chr(39) * 2)}%'" for term in _terms(question) for column in matched
+    )
+
+    selected = ["id", "title", snippet] if "title" in columns else ["id", snippet]
+    selected += [column for column in (timestamp, author) if column]
+    order = f" ORDER BY {timestamp} DESC" if timestamp else ""
+
+    return json.dumps(
+        {
+            "sql": f"SELECT {', '.join(dict.fromkeys(selected))} FROM {table} WHERE {where}{order} LIMIT 10",
+            "table": table,
+            "id_column": "id",
+            "title_column": "title" if "title" in columns else snippet,
+            "snippet_column": snippet,
+            "timestamp_column": timestamp,
+            "author_column": author,
+        }
+    )
+
+
 def _pick_content_text(body: dict[str, Any]) -> str:
     if _wants_plan(body):
         return PLAN_RESPONSE_TEXT
     if _wants_json_protocol_tool_call(body):
         return TOOL_CALL_RESPONSE_TEXT
+    if _wants_sql(body):
+        return _sql_response(body)
     return CONTENT_TEXT
 
 

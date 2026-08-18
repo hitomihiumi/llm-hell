@@ -56,6 +56,20 @@ logger = logging.getLogger("llmhell.mcp.postgres")
 _ERROR_PREFIXES = ("Error:",)
 SNIPPET_CHARS = 400
 
+# Candidates for the deterministic fallback, most specific first. Only used
+# when a column of that role is actually present in the introspected schema.
+_SNIPPET_COLUMNS = ("body", "content", "description", "summary", "text")
+_TIMESTAMP_COLUMNS = ("updated_at", "created_at", "decided_at", "occurred_at", "published_at")
+_AUTHOR_COLUMNS = ("author", "reporter", "owner", "decided_by", "created_by")
+
+
+def _prefer(candidates: tuple[str, ...], available: set[str] | None) -> str | None:
+    """First candidate the table actually has, or None if the schema is
+    unknown - never a guess."""
+    if not available:
+        return None
+    return next((name for name in candidates if name in available), None)
+
 
 class PostgresKbConnector:
     """Implements `Connector` for the Postgres knowledge base."""
@@ -78,20 +92,50 @@ class PostgresKbConnector:
         configured = (self._source.config or {}).get("tables") if self._source else None
         return list(configured or self._settings.kb_search_tables)
 
+    def _schema_columns(self) -> dict[str, set[str]]:
+        """Column names per table, read back out of the introspected DDL.
+
+        `_introspect` renders each table as `name(col type, col type)`, which
+        is the only description of the real schema this class has. Parsing it
+        back is cheaper than a second round-trip and cannot disagree with
+        what the model was shown.
+        """
+        columns: dict[str, set[str]] = {}
+        for line in (self._schema_text or "").splitlines():
+            table, _, rendered = line.partition("(")
+            if not table or not rendered.endswith(")"):
+                continue
+            columns[table.strip()] = {
+                part.strip().split(" ")[0] for part in rendered[:-1].split(",") if part.strip()
+            }
+        return columns
+
     def _fallback_tables(self) -> list[FallbackTable]:
         """Column mapping for the deterministic fallback.
 
-        Read from the source's config when present so a deployment can point
-        this at its own tables; otherwise the demo corpus's shape.
+        Read from the source config when present, so a deployment can point
+        this at its own tables. Otherwise the columns are resolved against
+        the introspected schema by preference, rather than assumed from the
+        table name: `articles` dates its rows `updated_at`, `tickets` uses
+        `created_at`, and `decisions` uses `decided_at`, so any rule keyed on
+        the name is wrong for the next table somebody adds.
+
+        When introspection failed there is no schema to resolve against, and
+        the optional columns are left unset. A missing ORDER BY costs an
+        ordering; a guessed column name that does not exist costs the whole
+        query.
         """
         configured = (self._source.config or {}).get("fallback_tables") if self._source else None
         if configured:
             return [FallbackTable(**entry) for entry in configured]
+
+        schema = self._schema_columns()
         return [
             FallbackTable(
                 table=table,
-                timestamp_column="updated_at" if table == "articles" else "created_at",
-                author_column="author" if table == "articles" else "reporter",
+                snippet_column=_prefer(_SNIPPET_COLUMNS, schema.get(table)) or "body",
+                timestamp_column=_prefer(_TIMESTAMP_COLUMNS, schema.get(table)),
+                author_column=_prefer(_AUTHOR_COLUMNS, schema.get(table)),
             )
             for table in self._tables
         ]
