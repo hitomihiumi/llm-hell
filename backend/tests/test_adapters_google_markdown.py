@@ -204,8 +204,31 @@ def test_drive_query_never_emits_an_empty_expression():
     assert "fullText contains" in drive_query("the and of")
 
 
-def test_gmail_query_is_near_passthrough():
+def test_gmail_query_ors_the_terms_of_a_question():
+    """Gmail ANDs bare terms, so a whole question needs every one of its
+    words in the same message and matches nothing. `{a b}` is Gmail's OR."""
+    built = gmail_query("what does the Gmail team say about the inbox")
+
+    assert built.startswith("{") and built.endswith("}")
+    assert "Gmail" in built
+    assert "inbox" in built
+    assert "what" not in built
+
+
+def test_gmail_query_leaves_an_expert_query_alone():
+    """A query using Gmail's own operators was written by someone who knows
+    the syntax; reducing it to terms would search for the word "from"."""
     assert gmail_query("from:alice budget") == "from:alice budget"
+    assert gmail_query("is:unread") == "is:unread"
+    assert gmail_query("subject:deploy after:2026/01/01") == "subject:deploy after:2026/01/01"
+
+
+def test_gmail_query_does_not_brace_a_single_term():
+    assert gmail_query("inbox") == "inbox"
+
+
+def test_gmail_query_strips_double_quotes():
+    """An unbalanced quote breaks the whole expression."""
     assert '"' not in gmail_query('say "hello"')
 
 

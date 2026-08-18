@@ -2,10 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "kb-frontend",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "frontend", "--", "--port", "3001"],
+      "name": "web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "frontend", "dev", "--port", "3001"],
       "port": 3001
+    },
+    {
+      "name": "web-verify",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "frontend", "exec", "next", "start", "--port", "3002"],
+      "port": 3002
     }
   ]
 }

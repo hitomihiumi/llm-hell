@@ -219,6 +219,17 @@ pnpm dev          # :3000 by default; use --port 3001 to match compose
 pnpm lint
 ```
 
+**Do not `pnpm build` while `pnpm dev` is running.** Both write `.next`, and
+the production build leaves the dev server's SSR workers crashing with
+`Jest worker encountered 2 child process exceptions` — an error that names
+nothing useful and looks like a bug in whichever page you open next. Use
+`pnpm exec tsc --noEmit` to typecheck against a live dev server, and if the
+two have already collided, `rm -rf .next` and restart `pnpm dev`.
+
+`.claude/launch.json` has a `web-verify` entry that serves the production
+build on :3002, which is how a page can be checked without touching the dev
+server at all.
+
 Tests use in-memory SQLite, so **no Postgres-only column types** may appear
 in `app/models/` — no `JSONB`, `ARRAY`, `UUID`, `TSVECTOR`. The first one
 added takes the whole API-level suite down with it.

@@ -97,6 +97,9 @@ def escape_drive_term(text: str) -> str:
 
 
 _DRIVE_MAX_TERMS = 4
+# Gmail ORs these in one expression, so this is a query-length budget rather
+# than a round-trip one, and can afford to be the same as Drive's.
+_GMAIL_MAX_TERMS = 4
 
 
 def drive_query(text: str) -> str:
@@ -138,10 +141,39 @@ def drive_query(text: str) -> str:
     return f"({clauses}) and trashed = false"
 
 
+# Gmail's own operators. A query containing one was written by someone who
+# knows the syntax, and reducing it to terms would destroy their intent -
+# `from:anna` would become a search for the words "from" and "anna".
+_GMAIL_OPERATORS = re.compile(
+    r"\b(from|to|cc|bcc|subject|label|in|is|has|filename|list|deliveredto|"
+    r"after|before|older|newer|older_than|newer_than|size|larger|smaller|category):",
+    re.IGNORECASE,
+)
+
+
 def gmail_query(text: str) -> str:
-    """Gmail's query language does accept bare terms, so this is nearly a
-    passthrough - but a stray double quote would unbalance the expression."""
-    return text.replace('"', " ").strip()
+    """Turn a question into a Gmail search.
+
+    Gmail accepts bare terms, which made this a passthrough for a long time -
+    and passing the whole question through is exactly the bug. Gmail ANDs
+    bare terms, so "what does the Gmail team say about the inbox" requires
+    every one of those words to appear in the same message and matches
+    nothing, even though "inbox" and "Gmail app" each match on their own.
+
+    `{a b}` is Gmail's OR, so the terms are joined that way. A query already
+    using Gmail's operators is passed through untouched, minus double quotes
+    which would unbalance the expression.
+    """
+    cleaned = (text or "").replace('"', " ").strip()
+    if not cleaned or _GMAIL_OPERATORS.search(cleaned):
+        return cleaned
+
+    terms = search_terms(cleaned, limit=_GMAIL_MAX_TERMS)
+    if not terms:
+        return cleaned
+    if len(terms) == 1:
+        return terms[0]
+    return "{" + " ".join(terms) + "}"
 
 
 # --- Markdown report parsing -----------------------------------------------
