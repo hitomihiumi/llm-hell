@@ -381,7 +381,7 @@ class GitLabConnector:
             read += 1
         return read
 
-    async def fetch_content(self, hit_id: str) -> dict[str, Any] | None:
+    async def fetch_content(self, hit_id: str, *, ctx: SearchContext | None = None) -> dict[str, Any] | None:
         """Full text behind a hit, for the content viewer.
 
         Ids are the ones this connector minted in `search`:

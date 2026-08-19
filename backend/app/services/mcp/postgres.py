@@ -324,7 +324,7 @@ class PostgresKbConnector:
 
     # --- single record ----------------------------------------------------
 
-    async def fetch_content(self, hit_id: str) -> dict[str, Any] | None:
+    async def fetch_content(self, hit_id: str, *, ctx: SearchContext | None = None) -> dict[str, Any] | None:
         """The whole row as readable text, for the content viewer.
 
         Search shows a 400-character excerpt centred on the match, which is

@@ -78,6 +78,27 @@ def select_endpoint(endpoints: list[ModelEndpoint], settings: Settings) -> Model
     return enabled[0]
 
 
+def select_vision_endpoint(endpoints: list[ModelEndpoint], settings: Settings) -> ModelEndpoint | None:
+    """The endpoint that reads page images, or None when none is configured.
+
+    Deliberately NOT the answer-model fallback that `select_endpoint` uses.
+    Sending a page image to a text-only model does not degrade, it fails - and
+    on a server without multimodal support it fails as a 400 per page. No
+    vision endpoint means no illustrations, which is a document read slightly
+    less well rather than a search that errors.
+    """
+    if not settings.vision_model_id:
+        return None
+    for endpoint in endpoints:
+        if endpoint.enabled and endpoint.model_id == settings.vision_model_id:
+            return endpoint
+    logger.warning(
+        "VISION_MODEL_ID=%r matches no enabled endpoint; PDFs will be read without their images",
+        settings.vision_model_id,
+    )
+    return None
+
+
 def render_hit(index: int, hit: SearchHit, *, snippet_chars: int) -> str:
     """One numbered block. The number is what the model is told to cite."""
     header = f"[{index}] source={hit.source} | {hit.title}"

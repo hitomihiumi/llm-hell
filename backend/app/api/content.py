@@ -14,16 +14,25 @@ already returns the message body - simply has no handler and answers 404.
 
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.openai_proxy import get_http_client
+from app.core.config import get_settings
+from app.core.db import get_db
 from app.core.sessions import CurrentUser
+from app.models.endpoint import ModelEndpoint
 from app.models.source import SOURCE_GITLAB, SOURCE_GOOGLE_DRIVE, SOURCE_POSTGRES_KB
 from app.schemas.content import ContentOut
+from app.services.mcp.connector import SearchContext
 from app.services.mcp.gitlab import GitLabConnector
 from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.postgres import PostgresKbConnector
 from app.services.mcp.registry import McpRegistry, get_mcp_registry
 from app.services.mcp.transport import summarise_exception
+from app.services.search import answer as answer_service
 
 logger = logging.getLogger("llmhell.api.content")
 
@@ -37,8 +46,10 @@ _READABLE = (SOURCE_GITLAB, SOURCE_GOOGLE_DRIVE, SOURCE_POSTGRES_KB)
 @router.get("/{hit_id:path}", response_model=ContentOut)
 async def get_content(
     hit_id: str,
-    _: CurrentUser,
+    current: CurrentUser,
+    db: AsyncSession = Depends(get_db),
     registry: McpRegistry = Depends(get_mcp_registry),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ) -> ContentOut:
     source_key = hit_id.split(":", 1)[0]
     if source_key not in _READABLE:
@@ -48,8 +59,20 @@ async def get_content(
     if not isinstance(connector, GitLabConnector | GoogleWorkspaceConnector | PostgresKbConnector):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "that source is not configured")
 
+    # The viewer gets the same context a search would, so a PDF is shown
+    # with its pages read rather than as the text layer alone. Without this
+    # the answer could cite a diagram the reader then could not find.
+    settings = get_settings()
+    endpoints = list((await db.execute(select(ModelEndpoint))).scalars().all())
+    ctx = SearchContext(
+        db=db,
+        user=current,
+        http_client=http_client,
+        vision_endpoint=answer_service.select_vision_endpoint(endpoints, settings),
+    )
+
     try:
-        found = await connector.fetch_content(hit_id)
+        found = await connector.fetch_content(hit_id, ctx=ctx)
     except Exception as exc:  # noqa: BLE001 - the source failing is not a server error
         logger.warning("content lookup failed for %s: %s", hit_id, summarise_exception(exc))
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "the source could not be reached") from exc

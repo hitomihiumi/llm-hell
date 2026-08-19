@@ -42,6 +42,10 @@ class SearchContext:
     # falls back to a deterministic ILIKE query rather than returning
     # nothing.
     answer_endpoint: ModelEndpoint | None = None
+    # Only the Drive connector uses this, to read pages of a PDF that the
+    # text layer cannot describe. None means PDFs contribute their text and
+    # nothing else, which is a document read less well rather than an error.
+    vision_endpoint: ModelEndpoint | None = None
     debug: bool = False
 
 

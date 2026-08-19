@@ -38,6 +38,11 @@ into one shape, fuses the rankings, and streams the answer back over SSE.
   that were actually in the prompt — including inside a list item or a table
   cell — and a number the model invented is dropped and counted, never
   rendered as a link.
+- **A vision model reads what the text layer cannot.** A datasheet's
+  specifications extract cleanly and still say nothing about which pad is
+  UART3. The pages that are mostly picture are rendered and transcribed by a
+  second endpoint, and that transcription joins the document as ordinary
+  text — so the answer model, which cannot see, can still quote a pinout.
 - **PDFs on Drive are read, not just listed.** Drive refuses to export a PDF
   and refuses to render one, so the file is downloaded through the MCP server
   and its text layer parsed here — which is what makes a PDF citable rather

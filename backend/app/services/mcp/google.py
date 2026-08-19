@@ -54,6 +54,7 @@ from typing import Any
 from app.core.config import Settings
 from app.models.source import SOURCE_GOOGLE_DRIVE, SOURCE_GOOGLE_MAIL, Source
 from app.schemas.search import SearchHit
+from app.services.llm import vision
 from app.services.mcp.connector import (
     SearchContext,
     SourceResult,
@@ -70,6 +71,7 @@ from app.services.mcp.transport import (
     list_tool_names,
     summarise_exception,
 )
+from app.services.pdf import page_stats, render_pages, select_visual_pages
 
 logger = logging.getLogger("llmhell.mcp.google")
 
@@ -597,6 +599,10 @@ class GoogleWorkspaceConnector:
         # in `_to_hits` and read by enrichment, which has to know whether a
         # hit is a Google Doc or a PDF and has nothing on the hit to tell it.
         self._type_hints: dict[str, str] = {}
+        # (file id, byte length) -> {page index: transcription}. Keyed on
+        # length as well as id so a document edited in Drive is described
+        # again rather than answered from a stale reading.
+        self._page_text: dict[tuple[str, int], dict[int, str]] = {}
 
     @property
     def _account(self) -> str | None:
@@ -706,11 +712,21 @@ class GoogleWorkspaceConnector:
         # Search results carry no body text, so an answer built on them would
         # have titles to cite and nothing to quote. Enriching a bounded number
         # of the top hits is what makes a citation worth following.
+        # Guarded separately from the search itself, and this is not belt and
+        # braces. Enrichment reads documents, renders pages and calls a second
+        # model - far more ways to fail than a search has - and it runs after
+        # the results are already in hand. A missing PDF parser once turned a
+        # working Drive search into an empty source and an ERROR line saying
+        # the connector raised, "which it should not".
         enriched = 0
         if hits and self._settings.google_enrich_hits > 0:
-            enriched = await self._enrich(
-                hits[: self._settings.google_enrich_hits], query=query
-            )
+            try:
+                enriched = await self._enrich(
+                    hits[: self._settings.google_enrich_hits], query=query, ctx=ctx
+                )
+            except Exception as exc:  # noqa: BLE001 - snippets are a bonus, hits are the result
+                logger.warning("%s enrichment failed: %s", self.key, summarise_exception(exc))
+                result.degraded = True
 
         result.hits = hits
         result.detail = {
@@ -772,7 +788,7 @@ class GoogleWorkspaceConnector:
             return [], "markdown"
         return [], "unrecognised"
 
-    async def _enrich(self, hits: list[SearchHit], *, query: str) -> int:
+    async def _enrich(self, hits: list[SearchHit], *, query: str, ctx: SearchContext) -> int:
         """Fetch body text for hits that have none, in place.
 
         Search returns metadata only, so without this an answer has titles to
@@ -801,9 +817,16 @@ class GoogleWorkspaceConnector:
             # it ("not a viewable image type"), so the only way to its content
             # is to download the file and parse it here.
             if is_pdf(self._type_hints.get(hit.external_id)):
-                text = await self._read_pdf(hit.external_id)
+                text = await self._read_pdf(hit.external_id, ctx=ctx)
                 if text:
-                    hit.snippet = excerpt_around(text, query, SNIPPET_CHARS)
+                    # A wider window than the other surfaces get. A PDF's
+                    # answer is often a diagram transcription several
+                    # sentences long, and 400 characters cuts it mid-pinout -
+                    # while the answer prompt has room for 1200 per hit and
+                    # was simply not being given it.
+                    hit.snippet = excerpt_around(
+                        text, query, self._settings.answer_snippet_chars
+                    )
                     enriched += 1
                 continue
 
@@ -846,7 +869,7 @@ class GoogleWorkspaceConnector:
             self._type_hints[file_id] = found
         return found
 
-    async def _read_pdf(self, file_id: str) -> str:
+    async def _read_pdf_bytes(self, file_id: str) -> bytes | None:
         """Download a PDF through the server and return its text layer.
 
         The bytes never cross the MCP boundary: `download` saves the file into
@@ -867,12 +890,12 @@ class GoogleWorkspaceConnector:
             )
         except Exception as exc:  # noqa: BLE001 - a document that will not download is not fatal
             logger.info("could not download %s: %s", file_id, summarise_exception(exc))
-            return ""
+            return None
 
         reported = parse_download_path(raw.text)
         if not reported:
             logger.info("download of %s reported no path", file_id)
-            return ""
+            return None
 
         share = Path(self._settings.google_share_dir).resolve()
         try:
@@ -880,20 +903,70 @@ class GoogleWorkspaceConnector:
             path.relative_to(share)
         except (ValueError, OSError):
             logger.warning("refusing a download path outside %s: %r", share, reported)
-            return ""
+            return None
 
         try:
-            data = path.read_bytes()
+            return path.read_bytes()
         except OSError as exc:
             # The usual cause is the share directory not being mounted into
             # this container at all, which is a deployment mistake rather than
             # a bad document - so it is worth a louder line than the rest.
             logger.warning("could not read %s: %s", path, exc)
+            return None
+
+    async def _read_pdf(self, file_id: str, *, ctx: SearchContext | None = None) -> str:
+        """A PDF as text: its text layer, plus its pages read by a vision
+        model when one is configured.
+
+        The two are not alternatives. The text layer is exact and comes first;
+        the page transcriptions are appended and labelled, because what is
+        only in a diagram - a pin name, a wiring order, a value on a chart -
+        is precisely what the text layer cannot hold. The datasheet this was
+        built against extracts 6k characters of specifications and still says
+        nothing about which pad is UART3 TX.
+
+        Transcriptions are cached per page for the life of the process. They
+        do not depend on the question, so re-describing the same page for
+        every search would be paying a GPU to produce a string we already had.
+        """
+        data = await self._read_pdf_bytes(file_id)
+        if data is None:
             return ""
 
-        return extract_pdf_text(data, limit=self._settings.google_pdf_max_chars)
+        text_layer = extract_pdf_text(data, limit=self._settings.google_pdf_max_chars)
 
-    async def fetch_content(self, hit_id: str) -> dict[str, Any] | None:
+        endpoint = ctx.vision_endpoint if ctx else None
+        if endpoint is None or self._settings.vision_max_pages <= 0:
+            return text_layer
+
+        stats = page_stats(data)
+        wanted = select_visual_pages(stats, max_pages=self._settings.vision_max_pages)
+        if not wanted:
+            return text_layer
+
+        fingerprint = (file_id, len(data))
+        cached = self._page_text.setdefault(fingerprint, {})
+        missing = [index for index in wanted if index not in cached]
+
+        if missing:
+            images = render_pages(
+                data,
+                missing,
+                scale=self._settings.vision_scale,
+                quality=self._settings.vision_jpeg_quality,
+            )
+            described = await vision.describe_pages(
+                endpoint, images, http_client=ctx.http_client
+            )
+            # Remember the misses too: a page the model said nothing about
+            # will say nothing about it next time either, and re-rendering it
+            # on every search is the expensive half.
+            for index in missing:
+                cached[index] = described.get(index, "")
+
+        return vision.merge(text_layer, {index: cached[index] for index in wanted if cached.get(index)})
+
+    async def fetch_content(self, hit_id: str, *, ctx: SearchContext | None = None) -> dict[str, Any] | None:
         """A document's whole text, for the viewer.
 
         Reuses the same `manage_docs` read that enrichment uses - the
@@ -906,7 +979,10 @@ class GoogleWorkspaceConnector:
             return None
 
         if is_pdf(await self._type_of(file_id)):
-            text = await self._read_pdf(file_id)
+            # With a context the viewer shows what the answer saw, diagrams
+            # included; without one it degrades to the text layer rather than
+            # refusing.
+            text = await self._read_pdf(file_id, ctx=ctx)
             if not text:
                 return None
             return {

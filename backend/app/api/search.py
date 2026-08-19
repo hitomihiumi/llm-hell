@@ -42,11 +42,21 @@ logger = logging.getLogger("llmhell.api.search")
 router = APIRouter(prefix="/api", tags=["search"], dependencies=[Depends(require_csrf)])
 
 
-async def _answer_endpoint(db: AsyncSession, settings: Settings) -> ModelEndpoint | None:
+async def _endpoints(db: AsyncSession, settings: Settings) -> tuple[ModelEndpoint | None, ModelEndpoint | None]:
+    """The answer endpoint and the vision endpoint, from one query.
+
+    Both are looked up together because they come from the same table and a
+    search needs both: one to write the answer, one to read the pages of a
+    PDF. Either may be None, and neither being present is a working search
+    with less in it rather than an error.
+    """
     endpoints = list(
         (await db.execute(select(ModelEndpoint).order_by(ModelEndpoint.name))).scalars().all()
     )
-    return answer_service.select_endpoint(endpoints, settings)
+    return (
+        answer_service.select_endpoint(endpoints, settings),
+        answer_service.select_vision_endpoint(endpoints, settings),
+    )
 
 
 async def _record_answer_telemetry(
@@ -116,9 +126,14 @@ async def search(
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ) -> SearchResponse:
     settings = get_settings()
-    endpoint = await _answer_endpoint(db, settings)
+    endpoint, vision = await _endpoints(db, settings)
     ctx = SearchContext(
-        db=db, user=current, http_client=http_client, answer_endpoint=endpoint, debug=payload.debug
+        db=db,
+        user=current,
+        http_client=http_client,
+        answer_endpoint=endpoint,
+        vision_endpoint=vision,
+        debug=payload.debug,
     )
 
     federated, record = await federated_search(
@@ -179,9 +194,14 @@ async def search_stream(
     settings = get_settings()
 
     async def events() -> AsyncIterator[bytes]:
-        endpoint = await _answer_endpoint(db, settings)
+        endpoint, vision = await _endpoints(db, settings)
         ctx = SearchContext(
-            db=db, user=current, http_client=http_client, answer_endpoint=endpoint, debug=payload.debug
+            db=db,
+            user=current,
+            http_client=http_client,
+            answer_endpoint=endpoint,
+            vision_endpoint=vision,
+            debug=payload.debug,
         )
 
         try:

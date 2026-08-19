@@ -126,6 +126,18 @@ class Settings(BaseSettings):
     # A PDF's text layer is unbounded; a prompt is not. Extraction stops here
     # and the excerpt is taken from what was read.
     google_pdf_max_chars: int = 200_000
+
+    # --- vision -----------------------------------------------------------
+    # A second endpoint that reads page images. Empty means the feature is
+    # off, and a PDF then contributes only its text layer - which is the
+    # correct degraded behaviour, not a failure.
+    vision_model_id: str = ""
+    # How many pages of one document may be shown to it. This is the cap that
+    # keeps a 200-page manual from becoming 200 GPU calls; the pages are
+    # chosen by how much of them is picture rather than text.
+    vision_max_pages: int = 4
+    vision_scale: float = 1.5
+    vision_jpeg_quality: int = 85
     google_mcp_command: str = "npx"
     google_mcp_args: list[str] = ["-y", "@aaronsb/google-workspace-mcp"]
     google_client_id: str = ""

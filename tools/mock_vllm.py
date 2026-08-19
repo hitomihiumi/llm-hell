@@ -212,11 +212,50 @@ def _sql_response(body: dict[str, Any]) -> str:
     )
 
 
+# --- vision ---------------------------------------------------------------
+#
+# Stands in for the Qwen3-VL endpoint. Without this there is no way to test
+# the PDF path end to end without a second GPU: the code that renders pages,
+# calls a model and merges the result into the document is the part most
+# likely to be wrong, and it is unreachable if nothing answers an image.
+#
+# The reply deliberately contains facts that exist ONLY in a diagram - pad
+# names and a wiring order - so a test can prove the transcription reached the
+# answer prompt rather than merely being computed and dropped.
+
+VISION_TEXT = """\
+Board top view, pad and connector layout.
+
+UART pads, left edge, top to bottom: T1/R1, T2/R2, T3/R3, T4/R4, T6/R6.
+UART3 (T3/R3) is the pad pair nearest the USB connector and is labelled
+"GPS" in silkscreen.
+
+Power: 5V and GND pads either side of the BEC block, marked 5V 2A.
+The battery input pads are BAT+ and BAT-, bottom right, rated 3-6S.
+
+Motor outputs S1-S4 run along the right edge, each with an adjacent GND.
+A jumper marked JP1 selects between 5V and 9V on the VTX pad."""
+
+
+def _wants_vision(body: dict[str, Any]) -> bool:
+    """An OpenAI multimodal request: some message's content is a list with an
+    image part in it, rather than a plain string."""
+    for message in body.get("messages", []):
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(part, dict) and part.get("type") == "image_url" for part in content
+        ):
+            return True
+    return False
+
+
 def _pick_content_text(body: dict[str, Any]) -> str:
     if _wants_plan(body):
         return PLAN_RESPONSE_TEXT
     if _wants_json_protocol_tool_call(body):
         return TOOL_CALL_RESPONSE_TEXT
+    if _wants_vision(body):
+        return VISION_TEXT
     if _wants_sql(body):
         return _sql_response(body)
     return CONTENT_TEXT
