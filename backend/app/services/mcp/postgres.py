@@ -33,6 +33,7 @@ from app.services.mcp.connector import (
 )
 from app.services.mcp.transport import (
     McpError,
+    McpToolError,
     call_tool,
     list_tool_names,
     sse_session,
@@ -67,11 +68,25 @@ SNIPPET_CHARS = 400
 # silently degraded to its ILIKE fallback on every single search - eight
 # seconds spent to produce nothing.
 #
-# vLLM applies chat_template_kwargs per request, so this disables thinking for
-# this call alone; the answer itself still reasons, which is where it earns
-# its keep. On a server whose template has no such flag the field is ignored,
-# which is why the token budget is raised as well rather than instead.
-_NO_THINKING = {"chat_template_kwargs": {"enable_thinking": False}}
+# Two dialects, because the same model reached two ways needs two levers and
+# each is inert where it does not apply.
+#
+#   chat_template_kwargs - vLLM. Applied per request to the chat template.
+#   reasoning            - OpenRouter's own unified field.
+#
+# OpenRouter ACCEPTS chat_template_kwargs and does nothing with it: measured
+# against deepseek-v4-flash-0731 it still spent 1024 reasoning tokens and
+# returned an empty content, so a request that looked configured was not.
+# `reasoning: {"enabled": false}` took the same call from 8.4s and no output
+# to 1.6s and valid SQL.
+#
+# Note `{"exclude": true}` is NOT this - it hides the reasoning from the
+# response while the model still does it, which costs the same time and the
+# same tokens and was 18.2s in the same test.
+_NO_THINKING = {
+    "chat_template_kwargs": {"enable_thinking": False},
+    "reasoning": {"enabled": False},
+}
 TEXT2SQL_MAX_TOKENS = 1024
 
 # Candidates for the deterministic fallback, most specific first. Only used
@@ -192,7 +207,23 @@ class PostgresKbConnector:
             async with sse_session(self._settings.postgres_mcp_url) as session:
                 await self._ensure_schema(session, tables)
                 generated = await self._build_query(query, ctx=ctx, limit=limit)
-                rows = await self._run(session, generated)
+                try:
+                    rows = await self._run(session, generated)
+                except McpToolError as exc:
+                    # The model wrote SQL that parses, passes the validator and
+                    # then does not run - `column "rank" does not exist` is a
+                    # real one, invented despite the schema being in the
+                    # prompt. Falling back only when GENERATION fails left this
+                    # case killing the whole source, which is exactly what the
+                    # deterministic query exists to prevent.
+                    if generated.mode != "llm":
+                        raise
+                    logger.info("generated SQL would not run (%s); using the deterministic query", exc)
+                    fallback_tables = self._fallback_tables()
+                    if not fallback_tables:
+                        raise
+                    generated = build_fallback_query(query, fallback_tables[0], limit=limit)
+                    rows = await self._run(session, generated)
         except Exception as exc:  # noqa: BLE001 - isolation is the contract
             logger.warning("postgres search failed: %s", summarise_exception(exc))
             result.error = summarise_exception(exc)

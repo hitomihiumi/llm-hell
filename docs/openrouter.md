@@ -112,10 +112,24 @@ docker compose exec api python manage.py update-endpoint <endpoint_id> --api-key
 
 ## Things that differ from a local server
 
-**`chat_template_kwargs`.** This is how a vLLM server is told not to think on
-a given request, and it is not part of the OpenAI schema. A gateway may reject
-it. A 400 on a request carrying it is retried once without it — the
-optimisation is lost, the call is not.
+**Turning off reasoning takes a different field.** This matters more than it
+sounds: text2sql is a mechanical translation, and a reasoning model that
+deliberates over it spends its whole budget and returns an empty `content`.
+
+`chat_template_kwargs` is the vLLM lever. OpenRouter **accepts it and does
+nothing with it** — measured against `deepseek-v4-flash-0731`: 1024 reasoning
+tokens, empty output, 8.4s, and a request that looked configured but was not.
+Its own field is `reasoning`, and only one form of it works:
+
+| sent | result |
+| --- | --- |
+| `{"reasoning": {"enabled": false}}` | **1.6s, valid SQL, 0 reasoning tokens** |
+| `{"reasoning": {"max_tokens": 0}}` | 4.8s, still reasoned 563 tokens |
+| `{"reasoning": {"exclude": true}}` | 18.2s, empty output — hides the reasoning, does not stop it |
+
+Both dialects are sent together; each is inert where it does not apply. A 400
+on a request carrying them is retried once without them, so a gateway that
+rejects the fields outright costs the optimisation and not the call.
 
 **Concurrency.** `VISION_CONCURRENCY=4` is right for a gateway. It is wrong
 for a single-GPU local server: Ollama answered one of four parallel requests
