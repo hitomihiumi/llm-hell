@@ -39,6 +39,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      # The same directory google-mcp writes downloads into, mounted at the
+      # same path so the `**Path:**` it reports back is directly usable.
+      # READ-ONLY here: this container consumes those files and must never be
+      # able to touch the OAuth tokens sharing the mount.
+      - ./secrets/google-workspace/share:/data/share/google-workspace-mcp:ro
     # Migrations run on startup rather than as a documented manual step -
     # nothing ran them before, so a fresh stack came up against an empty
     # database and every request 500'd until somebody remembered.

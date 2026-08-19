@@ -38,6 +38,10 @@ into one shape, fuses the rankings, and streams the answer back over SSE.
   that were actually in the prompt — including inside a list item or a table
   cell — and a number the model invented is dropped and counted, never
   rendered as a link.
+- **PDFs on Drive are read, not just listed.** Drive refuses to export a PDF
+  and refuses to render one, so the file is downloaded through the MCP server
+  and its text layer parsed here — which is what makes a PDF citable rather
+  than a title with nothing behind it.
 - **Read the source without leaving.** A card shows a 400-character excerpt
   centred on the match, which answers "is this relevant" and not "what does
   it say". **View** opens the whole thing — a GitLab README rendered as

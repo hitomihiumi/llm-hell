@@ -119,6 +119,13 @@ class Settings(BaseSettings):
     # this API process (single worker only - see services/mcp/registry.py).
     google_mcp_mode: str = "http"
     google_mcp_url: str = "http://google-mcp:3003/mcp"
+    # Where google-mcp puts files it downloads. Mounted into this container
+    # read-only at the same path, so the path the server reports back can be
+    # opened directly rather than translated.
+    google_share_dir: str = "/data/share/google-workspace-mcp"
+    # A PDF's text layer is unbounded; a prompt is not. Extraction stops here
+    # and the excerpt is taken from what was read.
+    google_pdf_max_chars: int = 200_000
     google_mcp_command: str = "npx"
     google_mcp_args: list[str] = ["-y", "@aaronsb/google-workspace-mcp"]
     google_client_id: str = ""

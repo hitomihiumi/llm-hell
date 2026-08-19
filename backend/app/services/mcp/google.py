@@ -213,6 +213,103 @@ _DRIVE_URL_BY_TYPE = {
 }
 _DRIVE_URL_DEFAULT = "https://drive.google.com/file/d/{id}/view"
 
+# The abbreviated type the search report puts in its third column. Google's
+# own formats are "g/document", "g/spreadsheet"; everything else is a plain
+# extension, so a PDF reads simply "pdf".
+_PDF_TYPE_HINTS = frozenset(["pdf", "application/pdf"])
+
+# `download` answers with a report, not the bytes:
+#
+#     **name.pdf** saved to workspace
+#
+#     **Path:** /data/share/google-workspace-mcp/workspace/name.pdf
+#     **Size:** 373000 bytes
+#
+_DOWNLOAD_PATH = re.compile(r"^\*\*Path:\*\*\s*(\S.*?)\s*$", re.MULTILINE)
+
+
+def is_pdf(type_hint: str | None) -> bool:
+    return (type_hint or "").strip().lower() in _PDF_TYPE_HINTS
+
+
+_DRIVE_TYPE = re.compile(r"^\*\*Type:\*\*\s*(\S+)\s*$", re.MULTILINE)
+
+
+def parse_drive_type(text: str) -> str | None:
+    """The mime type out of a `manage_drive get` report.
+
+    Search remembers each file's type as it goes, but that memory is a
+    process attribute: the viewer can be opened on a link days later, or
+    after a restart, with nothing cached. Asking the server is one call and
+    it is the difference between the viewer working and the viewer being
+    mysteriously empty for exactly the files that needed it most.
+    """
+    match = _DRIVE_TYPE.search(text or "")
+    return match.group(1) if match else None
+
+
+def drive_type_hints(text: str) -> dict[str, str]:
+    """file id -> the report's abbreviated type, for the rows in a search.
+
+    `drive_hits_from_markdown` reads the same rows and throws this column
+    away after choosing a URL, but enrichment needs it: a Google Doc is read
+    with `manage_docs`, a PDF has to be downloaded and parsed, and nothing
+    else on a `SearchHit` distinguishes them.
+    """
+    hints: dict[str, str] = {}
+    for row in parse_markdown_rows(text):
+        if len(row) > 2 and row[0]:
+            hints[row[0]] = row[2]
+    return hints
+
+
+def parse_download_path(text: str) -> str | None:
+    """The path `manage_drive download` says it wrote to.
+
+    No bytes cross the MCP boundary - the server saves the file into its own
+    workspace and reports where. That directory is bind-mounted into this
+    container at the same path, so the answer is directly openable.
+    """
+    match = _DOWNLOAD_PATH.search(text or "")
+    return match.group(1) if match else None
+
+
+def extract_pdf_text(data: bytes, *, limit: int) -> str:
+    """A PDF's text layer, or "" when it has none.
+
+    Imported lazily: pypdf is only needed when a PDF actually turns up in
+    results, and paying its import on every API start for a source that may
+    not even be configured is not worth it.
+
+    A scanned page yields nothing here, which is not an error - it is the
+    case the vision model exists for, and returning "" is how this reports
+    that rather than by raising.
+    """
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    try:
+        reader = PdfReader(BytesIO(data))
+    except Exception as exc:  # noqa: BLE001 - a corrupt file is not a crash
+        logger.info("could not read PDF: %s", exc)
+        return ""
+
+    parts: list[str] = []
+    total = 0
+    for page in reader.pages:
+        try:
+            text = page.extract_text() or ""
+        except Exception:  # noqa: BLE001 - one bad page should not lose the rest
+            continue
+        if not text:
+            continue
+        parts.append(text)
+        total += len(text)
+        if total >= limit:
+            break
+    return "\n\n".join(parts)[:limit]
+
 
 def parse_markdown_rows(text: str) -> list[list[str]]:
     """Pipe-delimited rows from a `## Files (N)` / `## Messages (N)` report.
@@ -496,6 +593,10 @@ class GoogleWorkspaceConnector:
         self._settings = settings
         self._source = source
         self._tool = _SURFACES[key]["tool"]
+        # file id -> abbreviated type from the last search's report. Populated
+        # in `_to_hits` and read by enrichment, which has to know whether a
+        # hit is a Google Doc or a PDF and has nothing on the hit to tell it.
+        self._type_hints: dict[str, str] = {}
 
     @property
     def _account(self) -> str | None:
@@ -658,6 +759,11 @@ class GoogleWorkspaceConnector:
         parser = drive_hits_from_markdown if is_drive else email_hits_from_markdown
         hits = parser(raw.text, source_key=self.key, debug=debug)[:limit]
         if hits:
+            if is_drive:
+                # Remembered from the same rows the hits came from, because
+                # enrichment has to tell a Google Doc from a PDF and the hit
+                # itself carries nothing that does.
+                self._type_hints.update(drive_type_hints(raw.text))
             return hits, "markdown"
 
         # A genuinely empty result reads "No messages found for query: …",
@@ -690,6 +796,17 @@ class GoogleWorkspaceConnector:
             if not hit.external_id or hit.snippet:
                 continue
 
+            # A PDF is neither a Doc nor a message: Drive refuses to export it
+            # ("Export only supports Docs Editors files") and refuses to render
+            # it ("not a viewable image type"), so the only way to its content
+            # is to download the file and parse it here.
+            if is_pdf(self._type_hints.get(hit.external_id)):
+                text = await self._read_pdf(hit.external_id)
+                if text:
+                    hit.snippet = excerpt_around(text, query, SNIPPET_CHARS)
+                    enriched += 1
+                continue
+
             if hit.kind == "email":
                 tool, args = "manage_email", {"operation": "read", "messageId": hit.external_id}
             elif "docs.google.com/document" in (hit.url or ""):
@@ -709,6 +826,73 @@ class GoogleWorkspaceConnector:
                 enriched += 1
         return enriched
 
+    async def _type_of(self, file_id: str) -> str | None:
+        """The file's type, from the last search if it is still remembered and
+        from the server otherwise."""
+        cached = self._type_hints.get(file_id)
+        if cached:
+            return cached
+
+        try:
+            raw = await self._call(
+                "manage_drive", {"email": self._account, "operation": "get", "fileId": file_id}
+            )
+        except Exception as exc:  # noqa: BLE001 - unknown type, handled by the caller
+            logger.info("could not read metadata for %s: %s", file_id, summarise_exception(exc))
+            return None
+
+        found = parse_drive_type(raw.text)
+        if found:
+            self._type_hints[file_id] = found
+        return found
+
+    async def _read_pdf(self, file_id: str) -> str:
+        """Download a PDF through the server and return its text layer.
+
+        The bytes never cross the MCP boundary: `download` saves the file into
+        the server's own workspace and reports the path, and that directory is
+        bind-mounted here read-only at the same path.
+
+        The path therefore comes from the server's own output, which is why it
+        is resolved and confined to the share directory before anything is
+        opened. The same mount holds the OAuth tokens, and a server that could
+        name any path could name those.
+        """
+        from pathlib import Path
+
+        try:
+            raw = await self._call(
+                "manage_drive",
+                {"email": self._account, "operation": "download", "fileId": file_id},
+            )
+        except Exception as exc:  # noqa: BLE001 - a document that will not download is not fatal
+            logger.info("could not download %s: %s", file_id, summarise_exception(exc))
+            return ""
+
+        reported = parse_download_path(raw.text)
+        if not reported:
+            logger.info("download of %s reported no path", file_id)
+            return ""
+
+        share = Path(self._settings.google_share_dir).resolve()
+        try:
+            path = Path(reported).resolve()
+            path.relative_to(share)
+        except (ValueError, OSError):
+            logger.warning("refusing a download path outside %s: %r", share, reported)
+            return ""
+
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            # The usual cause is the share directory not being mounted into
+            # this container at all, which is a deployment mistake rather than
+            # a bad document - so it is worth a louder line than the rest.
+            logger.warning("could not read %s: %s", path, exc)
+            return ""
+
+        return extract_pdf_text(data, limit=self._settings.google_pdf_max_chars)
+
     async def fetch_content(self, hit_id: str) -> dict[str, Any] | None:
         """A document's whole text, for the viewer.
 
@@ -720,6 +904,17 @@ class GoogleWorkspaceConnector:
         prefix, _, file_id = hit_id.partition(":")
         if prefix != self.key or not file_id:
             return None
+
+        if is_pdf(await self._type_of(file_id)):
+            text = await self._read_pdf(file_id)
+            if not text:
+                return None
+            return {
+                "title": file_id,
+                "text": text[:MAX_CONTENT_CHARS],
+                "language": None,
+                "truncated": len(text) > MAX_CONTENT_CHARS,
+            }
 
         try:
             raw = await self._call(
