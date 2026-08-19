@@ -182,7 +182,33 @@ docker compose exec api python manage.py list-endpoints
 ```
 
 Pin which model writes answers with `ANSWER_MODEL_ID=<model_id>`; leaving it
-empty uses the first enabled endpoint. If no endpoint is registered at all,
+empty uses the first enabled endpoint.
+
+An endpoint is anything that speaks the OpenAI chat API, so a hosted gateway
+works the same way a local vLLM server does — only the URL, the key and the
+model id change:
+
+```bash
+docker compose exec api python manage.py add-endpoint   --name "DeepSeek (OpenRouter)" --base-url https://openrouter.ai/api/v1   --model-id deepseek/deepseek-chat --api-key sk-or-v1-... --role executor
+```
+
+The one thing that differs is `chat_template_kwargs`, which is how a vLLM
+server is told not to think and is not part of the OpenAI schema. A gateway
+may validate it away, so a 400 on a request carrying it is retried once
+without it: the optimisation is lost, the call is not.
+
+Running both the answer model and the vision model through one gateway is
+written up in **[docs/openrouter.md](docs/openrouter.md)** — including which
+Qwen variant to take, and which one returns nothing at all.
+
+A vision endpoint can be checked on its own, without a document or a search:
+
+```bash
+docker compose exec api python manage.py probe-vision <endpoint_id>
+```
+
+It sends a generated picture with known words in it and reports how many came
+back. A model that cannot see images answers politely and scores zero. If no endpoint is registered at all,
 search still returns its hits and simply has no answer — the result list
 never depends on the LLM being up.
 

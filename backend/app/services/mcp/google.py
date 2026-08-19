@@ -45,11 +45,14 @@ response matches no known shape at all `search()` reports that in
 `detail["warning"]` instead of quietly showing an empty list.
 """
 
+import asyncio
 import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+import httpx
 
 from app.core.config import Settings
 from app.models.source import SOURCE_GOOGLE_DRIVE, SOURCE_GOOGLE_MAIL, Source
@@ -604,6 +607,10 @@ class GoogleWorkspaceConnector:
         # in the index can be shown with the document's real title rather than
         # its id.
         self._titles: dict[str, str] = {}
+        # Documents being read in the background right now, so two
+        # searches a second apart do not both render the same pages.
+        self._transcribing: set[str] = set()
+        self._tasks: set[asyncio.Task[None]] = set()
 
     @property
     def _account(self) -> str | None:
@@ -836,7 +843,8 @@ class GoogleWorkspaceConnector:
             # it ("not a viewable image type"), so the only way to its content
             # is to download the file and parse it here.
             if is_pdf(self._type_hints.get(hit.external_id)):
-                text = await self._read_pdf(hit.external_id, ctx=ctx)
+                text = await self._read_pdf(hit.external_id, ctx=ctx, transcribe=False)
+                self._schedule_transcription(hit.external_id, ctx=ctx)
                 if text:
                     # A wider window than the other surfaces get. A PDF's
                     # answer is often a diagram transcription several
@@ -981,7 +989,58 @@ class GoogleWorkspaceConnector:
             logger.warning("could not read %s: %s", path, exc)
             return None
 
-    async def _read_pdf(self, file_id: str, *, ctx: SearchContext | None = None) -> str:
+    def _schedule_transcription(self, file_id: str, *, ctx: SearchContext) -> None:
+        """Read the document's pages after the response has gone out.
+
+        Not inline, and this is not a preference. A page takes ~25 seconds on
+        a local 8B vision model and a datasheet has four worth reading, while
+        a source that has not answered in `search_timeout_seconds` is dropped
+        from the fan-out. Doing this inside the request meant the Drive source
+        timed out at exactly 20000 ms and returned nothing at all - a working
+        search made worse by the feature meant to improve it.
+
+        So the first search that meets a PDF answers from its text layer and
+        starts the reading; the next one has the pictures. That is what the
+        index was always for - it fills in as documents are read - and the
+        only thing that changes here is that the reading stops blocking.
+        """
+        if ctx.vision_endpoint is None or self._settings.vision_max_pages <= 0:
+            return
+        if file_id in self._transcribing:
+            return
+
+        self._transcribing.add(file_id)
+
+        async def run() -> None:
+            # Its own session and its own client: the request's are closed
+            # when the response is sent, and this outlives the response by
+            # design.
+            from app.core.db import SessionLocal
+
+            try:
+                async with httpx.AsyncClient(timeout=self._settings.vision_timeout_seconds) as client, SessionLocal() as db:
+                    background = SearchContext(
+                        db=db,
+                        user=ctx.user,
+                        http_client=client,
+                        vision_endpoint=ctx.vision_endpoint,
+                    )
+                    await self._read_pdf(file_id, ctx=background, transcribe=True)
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001 - nobody is waiting on this
+                logger.warning("background transcription of %s failed: %s", file_id, summarise_exception(exc))
+            finally:
+                self._transcribing.discard(file_id)
+
+        task = asyncio.create_task(run())
+        # Held so the loop does not garbage-collect a running task, which is
+        # a documented way to lose background work silently.
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _read_pdf(
+        self, file_id: str, *, ctx: SearchContext | None = None, transcribe: bool = True
+    ) -> str:
         """A PDF as text: its text layer, plus its pages read by a vision
         model when one is configured.
 
@@ -1023,7 +1082,9 @@ class GoogleWorkspaceConnector:
         )
         missing = [index for index in wanted if index not in cached]
 
-        if missing:
+        # `transcribe=False` means "use whatever has already been read". The
+        # caller is inside a request that cannot wait for a GPU.
+        if missing and transcribe:
             images = render_pages(
                 data,
                 missing,
@@ -1031,7 +1092,11 @@ class GoogleWorkspaceConnector:
                 quality=self._settings.vision_jpeg_quality,
             )
             described = await vision.describe_pages(
-                endpoint, images, http_client=ctx.http_client
+                endpoint,
+                images,
+                http_client=ctx.http_client,
+                timeout=self._settings.vision_timeout_seconds,
+                concurrency=self._settings.vision_concurrency,
             )
             # The misses are stored too. A page the model said nothing about
             # will say nothing next time either, and rendering it again on

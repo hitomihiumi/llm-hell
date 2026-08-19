@@ -104,24 +104,34 @@ async def describe_pages(
     *,
     http_client: httpx.AsyncClient,
     timeout: float = 180.0,
+    concurrency: int = 1,
 ) -> dict[int, str]:
     """Page index -> transcription, for the pages that produced one.
 
-    Concurrent because each page is an independent request and a five-page
-    document read serially is five model calls end to end. The server bounds
-    its own concurrency; this does not need to.
+    One at a time by default, and that default was bought the hard way. An
+    earlier version fanned all four pages out at once on the reasoning that
+    "the server bounds its own concurrency" - which a hosted cluster does and
+    a local server does not. Ollama serves one slot on a 6 GB card: three of
+    the four requests came back as transport failures and the document was
+    indexed with one page of four, silently, because a failed page is a
+    missing illustration rather than an error.
+
+    Raise it for a server that really is parallel; the cost of getting it
+    wrong is invisible, which is why the safe value is the default.
     """
     if not pages:
         return {}
 
+    limit = asyncio.Semaphore(max(1, concurrency))
+
+    async def one(index: int) -> str:
+        async with limit:
+            return await describe_page(
+                endpoint, pages[index], http_client=http_client, timeout=timeout
+            )
+
     indices = sorted(pages)
-    results = await asyncio.gather(
-        *(
-            describe_page(endpoint, pages[index], http_client=http_client, timeout=timeout)
-            for index in indices
-        ),
-        return_exceptions=True,
-    )
+    results = await asyncio.gather(*(one(index) for index in indices), return_exceptions=True)
 
     described: dict[int, str] = {}
     for index, result in zip(indices, results, strict=True):

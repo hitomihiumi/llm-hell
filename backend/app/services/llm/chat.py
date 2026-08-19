@@ -99,22 +99,41 @@ async def complete(
     extra_body: dict[str, Any] | None = None,
 ) -> ChatResult:
     """One non-streaming completion."""
-    try:
-        response = await http_client.post(
-            _url(endpoint),
-            json=_body(
-                endpoint,
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stream=False,
-                extra=extra_body,
-            ),
-            headers=_headers(endpoint),
-            timeout=timeout,
+
+    async def post(extra: dict[str, Any] | None) -> httpx.Response:
+        try:
+            return await http_client.post(
+                _url(endpoint),
+                json=_body(
+                    endpoint,
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    stream=False,
+                    extra=extra,
+                ),
+                headers=_headers(endpoint),
+                timeout=timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise ChatError(f"{endpoint.model_id} unreachable: {exc}") from exc
+
+    response = await post(extra_body)
+
+    # `extra_body` carries provider-specific fields - `chat_template_kwargs`,
+    # which is how a vLLM server is told not to think. A gateway in front of
+    # the model may validate the body strictly and reject what it does not
+    # recognise, and then a field meant as an optimisation costs the whole
+    # call. One retry without it turns that into a slower answer rather than
+    # no answer, and swapping a direct vLLM endpoint for OpenRouter stops
+    # being a question anyone has to research first.
+    if extra_body and response.status_code == 400:
+        logger.info(
+            "%s rejected the request body; retrying without %s",
+            endpoint.model_id,
+            sorted(extra_body),
         )
-    except httpx.HTTPError as exc:
-        raise ChatError(f"{endpoint.model_id} unreachable: {exc}") from exc
+        response = await post(None)
 
     if response.status_code >= 400:
         raise ChatError(f"{endpoint.model_id} returned {response.status_code}: {response.text[:300]}")

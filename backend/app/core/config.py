@@ -138,6 +138,19 @@ class Settings(BaseSettings):
     vision_max_pages: int = 4
     vision_scale: float = 1.5
     vision_jpeg_quality: int = 85
+    # Generous, because this runs outside the request. A hosted 8B model
+    # answers a page in seconds and a local one took ~25s; a page that takes
+    # ten times that has gone wrong.
+    vision_timeout_seconds: float = 600.0
+    # How many pages may be in flight at once.
+    #
+    # 4 suits a hosted gateway, which is a cluster and expects parallelism.
+    # A LOCAL single-slot server does not: Ollama on one GPU answered one of
+    # four concurrent requests and failed the rest as transport errors, and
+    # the document was indexed with a quarter of its pages - silently, since
+    # a failed page is a missing illustration rather than an error. Set this
+    # to 1 for anything serving from a single card.
+    vision_concurrency: int = 4
     google_mcp_command: str = "npx"
     google_mcp_args: list[str] = ["-y", "@aaronsb/google-workspace-mcp"]
     google_client_id: str = ""
