@@ -20,7 +20,6 @@ import { cn } from "@/lib/utils";
 // Labels come from the dictionary rather than this list, so the routes
 // stay one thing and the words another.
 const OPTIONS = [
-  { href: "/search", key: "search" as const },
   { href: "/chat", key: "chat" as const },
 ];
 
