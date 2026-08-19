@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useCopy } from "@/i18n/LocaleProvider";
 import { cn } from "@/lib/utils";
 
 /**
@@ -16,16 +17,23 @@ import { cn } from "@/lib/utils";
  * uppercase lettering with a rule that draws in underneath, which is
  * permanent for the active one.
  */
+// Labels come from the dictionary rather than this list, so the routes
+// stay one thing and the words another.
 const OPTIONS = [
-  { href: "/search", label: "Search" },
-  { href: "/chat", label: "Chat" },
+  { href: "/search", key: "search" as const },
+  { href: "/chat", key: "chat" as const },
 ];
 
 export function LayoutSwitch() {
   const pathname = usePathname();
+  const { copy } = useCopy();
 
   return (
-    <div role="tablist" aria-label="Layout" className="flex items-center gap-7">
+    <div
+      role="tablist"
+      aria-label={copy.nav.layoutLabel}
+      className="flex items-center gap-7"
+    >
       {OPTIONS.map((option) => {
         const active = pathname === option.href;
         return (
@@ -40,7 +48,7 @@ export function LayoutSwitch() {
               active ? "text-white" : "text-white/50 hover:text-white",
             )}
           >
-            {option.label}
+            {copy.nav[option.key]}
             <span
               aria-hidden="true"
               className={cn(

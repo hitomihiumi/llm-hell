@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { SpaceButton } from "@/components/SpaceButton";
 import { Wordmark } from "@/components/Wordmark";
+import { useCopy } from "@/i18n/LocaleProvider";
 import { ApiError, api } from "@/lib/api";
 import type { User } from "@/lib/types";
 
@@ -19,6 +20,7 @@ const FIELD =
 
 function LoginForm() {
   const searchParams = useSearchParams();
+  const { copy } = useCopy();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -36,8 +38,8 @@ function LoginForm() {
     } catch (caught) {
       setError(
         caught instanceof ApiError && caught.status === 401
-          ? "Incorrect username or password."
-          : "Could not sign in. Is the backend running?",
+          ? copy.login.wrongCredentials
+          : copy.login.backendDown,
       );
       setBusy(false);
     }
@@ -48,20 +50,19 @@ function LoginForm() {
       <Wordmark className="h-7" />
 
       <p className="mt-10 font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
-        Knowledge base
+        {copy.login.eyebrow}
       </p>
       <h1 className="mt-3 font-display text-4xl font-semibold uppercase leading-[0.98] tracking-tight text-white sm:text-5xl">
-        Sign in
+        {copy.login.title}
       </h1>
       <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/60">
-        Search Google Workspace, GitLab and the internal knowledge base at once
-        — with every answer cited back to its source.
+        {copy.login.lede}
       </p>
 
       <div className="mt-10 flex flex-col gap-7">
         <label className="block">
           <span className="font-display text-[11px] uppercase tracking-[0.28em] text-white/40">
-            Username
+            {copy.login.username}
           </span>
           <input
             value={username}
@@ -76,7 +77,7 @@ function LoginForm() {
 
         <label className="block">
           <span className="font-display text-[11px] uppercase tracking-[0.28em] text-white/40">
-            Password
+            {copy.login.password}
           </span>
           <input
             type="password"
@@ -104,7 +105,7 @@ function LoginForm() {
         disabled={busy}
         className="mt-10 w-full"
       >
-        {busy ? "Signing in" : "Sign in"}
+        {busy ? copy.login.submitting : copy.login.submit}
       </SpaceButton>
     </form>
   );

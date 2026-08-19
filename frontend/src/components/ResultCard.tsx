@@ -3,17 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ContentViewer } from "@/components/ContentViewer";
+import { useCopy } from "@/i18n/LocaleProvider";
 import type { SearchHit } from "@/lib/types";
-
-const KIND_LABEL: Record<string, string> = {
-  document: "Doc",
-  email: "Email",
-  code: "Code",
-  repository: "Repo",
-  commit: "Commit",
-  row: "Record",
-  unknown: "Item",
-};
 
 function formatDate(value: string | null): string | null {
   if (!value) return null;
@@ -27,6 +18,7 @@ function formatDate(value: string | null): string | null {
  * hover. No raised grey panel — the border does the separating.
  */
 export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
+  const { copy } = useCopy();
   const [viewing, setViewing] = useState(false);
   const date = formatDate(hit.timestamp);
   // Internal record links route inside the app; everything else is an
@@ -82,7 +74,7 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
 
       <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 pl-9 font-mono text-[10px] uppercase tracking-[0.24em] text-white/35">
         <span className="border border-hairline px-1.5 py-0.5 text-white/50">
-          {KIND_LABEL[hit.kind] ?? hit.kind}
+          {copy.card.kinds[hit.kind] ?? hit.kind}
         </span>
         <span>{hit.source}</span>
         {hit.author && <span>{hit.author}</span>}
@@ -96,7 +88,7 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
           onClick={() => setViewing(true)}
           className="ml-auto border border-hairline px-2 py-0.5 text-white/50 transition-colors duration-300 hover:border-white hover:text-white"
         >
-          View
+          {copy.card.view}
         </button>
       </div>
 

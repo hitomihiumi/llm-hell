@@ -3,18 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/components/ChatMessage";
 import { SpaceButton } from "@/components/SpaceButton";
+import { useCopy } from "@/i18n/LocaleProvider";
 import { api } from "@/lib/api";
 import type { ChatTurn, Source } from "@/lib/types";
 import { type SearchRun, useSearchRun } from "@/lib/useSearch";
 import { cn } from "@/lib/utils";
 
-const SUGGESTIONS = [
-  "How does result ranking work?",
-  "Why must the KV cache be fp8?",
-  "What breaks when the open-file limit is too low?",
-];
-
 export default function ChatPage() {
+  const { copy } = useCopy();
   const [sources, setSources] = useState<Source[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(false);
@@ -106,18 +102,17 @@ export default function ChatPage() {
           />
 
           <p className="font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
-            Knowledge base
+            {copy.chat.eyebrow}
           </p>
           <h1 className="mt-3 max-w-3xl font-display text-4xl font-semibold uppercase leading-[0.98] tracking-tight text-white sm:text-6xl">
-            Ask anything
+            {copy.chat.title}
           </h1>
           <p className="mt-5 max-w-md text-sm leading-relaxed text-white/55">
-            Answers come from your Drive, GitLab and internal records — with the
-            sources attached.
+            {copy.chat.lede}
           </p>
 
           <div className="mt-10 flex w-full max-w-2xl flex-col border-t border-hairline">
-            {SUGGESTIONS.map((suggestion) => (
+            {copy.chat.suggestions.map((suggestion) => (
               <button
                 key={suggestion}
                 type="button"
@@ -157,7 +152,7 @@ export default function ChatPage() {
           onChange={(changeEvent) => setInput(changeEvent.target.value)}
           onKeyDown={onKeyDown}
           rows={2}
-          placeholder="Ask a question…  (Enter to send, Shift+Enter for a new line)"
+          placeholder={copy.chat.placeholder}
           className="w-full resize-none border-b border-hairline bg-transparent py-3 text-[15px] text-white outline-none transition-colors duration-300 placeholder:text-white/25 focus:border-white"
         />
 
@@ -168,8 +163,8 @@ export default function ChatPage() {
             className="font-display text-[10px] uppercase tracking-[0.24em] text-white/40 transition-colors duration-300 hover:text-white"
           >
             {selected.size === sources.length
-              ? "All sources"
-              : `${selected.size} of ${sources.length} sources`}
+              ? copy.chat.allSources
+              : copy.chat.someSources(selected.size, sources.length)}
           </button>
 
           <div className="ml-auto flex items-center gap-3">
@@ -184,7 +179,7 @@ export default function ChatPage() {
                 }}
                 className="border-hairline text-white/60"
               >
-                Stop
+                {copy.chat.stop}
               </SpaceButton>
             )}
             <SpaceButton
@@ -193,7 +188,7 @@ export default function ChatPage() {
               onClick={() => send(input)}
               disabled={busy || !input.trim()}
             >
-              Send
+              {copy.chat.send}
             </SpaceButton>
           </div>
         </div>

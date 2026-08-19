@@ -1,5 +1,7 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
+import { DICTIONARY } from "@/i18n/dictionary";
+import { getLocale } from "@/i18n/getLocale";
 import type { RecordOut } from "./types";
 
 const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8000";
@@ -15,6 +17,7 @@ export default async function RecordPage({
   params: Promise<{ table: string; pk: string }>;
 }) {
   const { table, pk } = await params;
+  const copy = DICTIONARY[await getLocale()];
   const cookieStore = await cookies();
   const header = cookieStore
     .getAll()
@@ -41,7 +44,7 @@ export default async function RecordPage({
       >
         <path d="M0 6h21M17 1.5 21.5 6 17 10.5" />
       </svg>
-      Back to search
+      {copy.record.back}
     </Link>
   );
 
@@ -51,8 +54,8 @@ export default async function RecordPage({
         {backLink}
         <p className="border-l-2 border-danger bg-danger-soft px-4 py-3 text-sm text-danger">
           {response.status === 404
-            ? "That record does not exist, or its table is not searchable."
-            : "The knowledge base could not be reached."}
+            ? copy.record.notFound
+            : copy.record.unreachable}
         </p>
       </div>
     );

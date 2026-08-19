@@ -5,6 +5,7 @@ import { AnswerPanel } from "@/components/AnswerPanel";
 import { ResultCard } from "@/components/ResultCard";
 import { SourceBadge } from "@/components/SourceBadge";
 import { SpaceButton } from "@/components/SpaceButton";
+import { useCopy } from "@/i18n/LocaleProvider";
 import { api } from "@/lib/api";
 import type { Source } from "@/lib/types";
 import { useSearchRun } from "@/lib/useSearch";
@@ -16,6 +17,7 @@ import { cn } from "@/lib/utils";
  * shape; both share the SSE handling in useSearchRun.
  */
 export default function SearchPage() {
+  const { copy, plural } = useCopy();
   const [sources, setSources] = useState<Source[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
@@ -31,8 +33,8 @@ export default function SearchPage() {
         setSources(loaded);
         setSelected(new Set(loaded.filter((s) => s.enabled).map((s) => s.key)));
       })
-      .catch(() => setSourcesError("Could not load the source list."));
-  }, []);
+      .catch(() => setSourcesError(copy.search.sourcesError));
+  }, [copy.search.sourcesError]);
 
   const toggle = useCallback((key: string) => {
     setSelected((current) => {
@@ -62,10 +64,10 @@ export default function SearchPage() {
     <div className="space-y-10">
       <header>
         <p className="font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
-          Federated search
+          {copy.search.eyebrow}
         </p>
         <h1 className="mt-3 font-display text-4xl font-semibold uppercase leading-[0.98] tracking-tight text-white sm:text-5xl">
-          Ask the knowledge base
+          {copy.search.title}
         </h1>
       </header>
 
@@ -74,7 +76,7 @@ export default function SearchPage() {
           <input
             value={query}
             onChange={(changeEvent) => setQuery(changeEvent.target.value)}
-            placeholder="Ask a question, or search for a term"
+            placeholder={copy.search.placeholder}
             // biome-ignore lint/a11y/noAutofocus: the sole input on a single-purpose screen; focusing it is what every user wants first
             autoFocus
             // Display face for scale, but NOT uppercase: text-transform would
@@ -89,13 +91,13 @@ export default function SearchPage() {
             disabled={run?.searching || !query.trim()}
             className="mb-3 shrink-0"
           >
-            {run?.searching ? "Searching" : "Search"}
+            {run?.searching ? copy.search.searching : copy.search.submit}
           </SpaceButton>
         </div>
 
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <span className="font-display text-[10px] uppercase tracking-[0.28em] text-white/30">
-            Sources
+            {copy.search.sources}
           </span>
 
           {sources.map((source) => {
@@ -106,7 +108,7 @@ export default function SearchPage() {
                 type="button"
                 onClick={() => toggle(source.key)}
                 disabled={!source.enabled}
-                title={source.enabled ? undefined : "Switched off by an admin"}
+                title={source.enabled ? undefined : copy.search.switchedOff}
                 className={cn(
                   "group flex items-center gap-2 font-display text-[11px] uppercase tracking-[0.24em] transition-colors duration-300 disabled:opacity-30",
                   on ? "text-white" : "text-white/40 hover:text-white/70",
@@ -135,7 +137,7 @@ export default function SearchPage() {
               }
               className="h-3 w-3 accent-[color:var(--accent)]"
             />
-            Generate an answer
+            {copy.search.generateAnswer}
           </label>
         </div>
       </form>
@@ -175,7 +177,7 @@ export default function SearchPage() {
       {run && run.hits.length > 0 ? (
         <section>
           <p className="mb-5 font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
-            {run.hits.length} {run.hits.length === 1 ? "Result" : "Results"}
+            {run.hits.length} {plural(run.hits.length, copy.search.results)}
           </p>
           <ol className="space-y-4">
             {run.hits.map((hit, index) => (
@@ -187,7 +189,7 @@ export default function SearchPage() {
         run &&
         !run.searching && (
           <p className="border-t border-hairline pt-6 text-sm text-white/50">
-            No results.
+            {copy.search.noResults}
             {failing.length > 0 && (
               <>
                 {" "}

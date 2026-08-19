@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { SpaceButton } from "@/components/SpaceButton";
+import { useCopy } from "@/i18n/LocaleProvider";
 import { ApiError, api } from "@/lib/api";
 import type { Source } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -14,6 +15,7 @@ interface HealthOut {
 }
 
 export default function SourcesPage() {
+  const { copy } = useCopy();
   const [sources, setSources] = useState<Source[]>([]);
   const [checking, setChecking] = useState<string | null>(null);
   const [health, setHealth] = useState<Record<string, HealthOut>>({});
@@ -26,8 +28,8 @@ export default function SourcesPage() {
       api
         .get<Source[]>("/api/sources")
         .then(setSources)
-        .catch(() => setNotice("Could not load sources.")),
-    [],
+        .catch(() => setNotice(copy.sources.loadFailed)),
+    [copy.sources.loadFailed],
   );
 
   useEffect(() => {
@@ -44,8 +46,8 @@ export default function SourcesPage() {
     } catch (caught) {
       setNotice(
         caught instanceof ApiError && caught.status === 403
-          ? "Checking a source requires an admin account."
-          : "The check failed.",
+          ? copy.sources.adminOnlyCheck
+          : copy.sources.checkFailed,
       );
     } finally {
       setChecking(null);
@@ -62,8 +64,8 @@ export default function SourcesPage() {
     } catch (caught) {
       setNotice(
         caught instanceof ApiError && caught.status === 403
-          ? "Changing a source requires an admin account."
-          : "The update failed.",
+          ? copy.sources.adminOnlyToggle
+          : copy.sources.updateFailed,
       );
     }
   }
@@ -72,15 +74,13 @@ export default function SourcesPage() {
     <div className="space-y-10">
       <header>
         <p className="font-display text-[11px] uppercase tracking-[0.42em] text-white/40">
-          Configuration
+          {copy.sources.eyebrow}
         </p>
         <h1 className="mt-3 font-display text-4xl font-semibold uppercase leading-[0.98] tracking-tight text-white sm:text-5xl">
-          Sources
+          {copy.sources.title}
         </h1>
         <p className="mt-4 max-w-xl text-sm leading-relaxed text-white/55">
-          What a source can actually do is not knowable from configuration —
-          whether a GitLab instance supports code search, for instance. Run a
-          check to ask its server directly.
+          {copy.sources.lede}
         </p>
       </header>
 
@@ -123,7 +123,7 @@ export default function SourcesPage() {
                   {source.kind}
                 </span>
                 <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">
-                  weight {source.weight}
+                  {copy.sources.weight} {source.weight}
                 </span>
                 <span
                   className={cn(
@@ -131,7 +131,9 @@ export default function SourcesPage() {
                     source.enabled ? "text-white/60" : "text-white/30",
                   )}
                 >
-                  {source.enabled ? "enabled" : "disabled"}
+                  {source.enabled
+                    ? copy.sources.enabled
+                    : copy.sources.disabled}
                 </span>
 
                 <div className="ml-auto flex gap-3">
@@ -142,7 +144,9 @@ export default function SourcesPage() {
                     onClick={() => toggle(source)}
                     className="border-hairline text-white/70"
                   >
-                    {source.enabled ? "Disable" : "Enable"}
+                    {source.enabled
+                      ? copy.sources.disable
+                      : copy.sources.enable}
                   </SpaceButton>
                   <SpaceButton
                     variant="outline"
@@ -151,7 +155,9 @@ export default function SourcesPage() {
                     disabled={checking === source.key}
                     onClick={() => check(source.key)}
                   >
-                    {checking === source.key ? "Checking" : "Check"}
+                    {checking === source.key
+                      ? copy.sources.checking
+                      : copy.sources.check}
                   </SpaceButton>
                 </div>
               </div>
@@ -160,11 +166,11 @@ export default function SourcesPage() {
                 <div className="mt-4 space-y-2 pl-6">
                   <p className="font-mono text-[10px] uppercase tracking-[0.2em]">
                     <span className={ok ? "text-accent" : "text-danger"}>
-                      {ok ? "reachable" : "unreachable"}
+                      {ok ? copy.sources.reachable : copy.sources.unreachable}
                     </span>
                     {source.last_checked_at && (
                       <span className="text-white/30">
-                        {" · checked "}
+                        {` · ${copy.sources.checkedAt} `}
                         {new Date(source.last_checked_at).toLocaleString()}
                       </span>
                     )}
@@ -184,7 +190,7 @@ export default function SourcesPage() {
                   {tools && (
                     <details className="group">
                       <summary className="cursor-pointer font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white">
-                        {tools.length} tools exposed
+                        {copy.sources.toolsExposed(tools.length)}
                       </summary>
                       <p className="mt-2 font-mono text-[11px] leading-relaxed break-words text-white/40">
                         {tools.join(", ")}

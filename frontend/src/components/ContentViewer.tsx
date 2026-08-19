@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnswerMarkdown } from "@/components/AnswerMarkdown";
+import { useCopy } from "@/i18n/LocaleProvider";
 import { api } from "@/lib/api";
 
 interface Content {
@@ -31,6 +32,7 @@ export function ContentViewer({
   hitId: string;
   onClose: () => void;
 }) {
+  const { copy } = useCopy();
   const [content, setContent] = useState<Content | null>(null);
   const [error, setError] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -43,12 +45,12 @@ export function ContentViewer({
         if (!cancelled) setContent(loaded);
       })
       .catch(() => {
-        if (!cancelled) setError("This result has nothing more to show.");
+        if (!cancelled) setError(copy.viewer.nothing);
       });
     return () => {
       cancelled = true;
     };
-  }, [hitId]);
+  }, [hitId, copy.viewer.nothing]);
 
   // Escape closes, and focus starts on the close button so the dialog is
   // dismissable from the keyboard before anything has loaded.
@@ -86,13 +88,13 @@ export function ContentViewer({
 
       <dialog
         open
-        aria-label={content?.title ?? "Loading"}
+        aria-label={content?.title ?? copy.viewer.loading}
         className="relative m-0 flex h-full w-full max-w-3xl flex-col border-l border-hairline bg-black p-0 text-white"
       >
         <header className="flex items-start justify-between gap-6 border-b border-hairline px-6 py-5 md:px-8">
           <div className="min-w-0">
             <p className="font-display text-[10px] uppercase tracking-[0.42em] text-white/40">
-              Source
+              {copy.viewer.eyebrow}
             </p>
             {/* Not uppercased: this is a file path, and case is information. */}
             <h2 className="mt-2 truncate font-display text-xl tracking-tight text-white">
@@ -105,7 +107,7 @@ export function ContentViewer({
             onClick={onClose}
             className="shrink-0 border border-hairline px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.24em] text-white/60 transition-colors duration-300 hover:border-white hover:text-white"
           >
-            Close
+            {copy.viewer.close}
           </button>
         </header>
 
@@ -142,7 +144,7 @@ export function ContentViewer({
 
           {content?.truncated && (
             <p className="mt-6 border-t border-hairline pt-4 font-mono text-[10px] uppercase tracking-[0.24em] text-white/35">
-              Truncated — open the source for the rest
+              {copy.viewer.truncated}
             </p>
           )}
         </div>

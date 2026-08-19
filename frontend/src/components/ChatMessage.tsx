@@ -5,10 +5,12 @@ import { AnswerMarkdown } from "@/components/AnswerMarkdown";
 import { jumpToHit } from "@/components/CitedText";
 import { ResultCard } from "@/components/ResultCard";
 import { SourceBadge } from "@/components/SourceBadge";
+import { useCopy } from "@/i18n/LocaleProvider";
 import type { Citation } from "@/lib/types";
 import type { SearchRun } from "@/lib/useSearch";
 
 export function ChatMessage({ run }: { run: SearchRun }) {
+  const { copy, plural } = useCopy();
   const [showSources, setShowSources] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
 
@@ -38,7 +40,9 @@ export function ChatMessage({ run }: { run: SearchRun }) {
               onClick={() => setShowReasoning(!showReasoning)}
               className="font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white"
             >
-              {showReasoning ? "− Hide reasoning" : "+ Show reasoning"}
+              {showReasoning
+                ? copy.answer.hideReasoning
+                : copy.answer.showReasoning}
             </button>
             {showReasoning && (
               <pre className="mt-3 max-h-64 overflow-y-auto border border-hairline p-4 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-white/45">
@@ -68,7 +72,10 @@ export function ChatMessage({ run }: { run: SearchRun }) {
             // <output> is the semantic element for a live result region, so a
             // screen reader announces this rather than sitting on a div with
             // a label no role supports.
-            <output aria-label="Searching" className="block space-y-3">
+            <output
+              aria-label={copy.message.searchingLabel}
+              className="block space-y-3"
+            >
               <span className="block h-px w-3/4 animate-pulse bg-white/15" />
               <span className="block h-px w-1/2 animate-pulse bg-white/15" />
             </output>
@@ -86,12 +93,12 @@ export function ChatMessage({ run }: { run: SearchRun }) {
               className="group flex items-center gap-2 font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white"
             >
               <span aria-hidden="true">{showSources ? "−" : "+"}</span>
-              {run.hits.length} {run.hits.length === 1 ? "source" : "sources"}
+              {run.hits.length} {plural(run.hits.length, copy.message.sources)}
               {run.hitsUsed !== undefined &&
                 run.hitsDropped !== undefined &&
                 run.hitsDropped > 0 &&
-                ` · answered from ${run.hitsUsed}`}
-              {failing.length > 0 && ` · ${failing.length} unavailable`}
+                copy.message.answeredFrom(run.hitsUsed)}
+              {failing.length > 0 && copy.message.unavailable(failing.length)}
             </button>
 
             {showSources && (

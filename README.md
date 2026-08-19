@@ -258,6 +258,7 @@ backend/
       search/          federation, RRF ranking, text2sql, answer synthesis
       llm/             chat client, reasoning parser, tokenizer
 frontend/src/
+  i18n/                locale cookie, dictionary, plural rules (en + uk)
   proxy.ts             auth gate (Next 16: this replaces middleware.ts)
   app/(app)/           search, sources, records — behind the real auth check
   app/api/search/stream/route.ts   SSE passthrough

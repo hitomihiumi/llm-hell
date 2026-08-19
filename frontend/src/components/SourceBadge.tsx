@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useCopy } from "@/i18n/LocaleProvider";
 import type { SourceStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +16,7 @@ import { cn } from "@/lib/utils";
  * results themselves.
  */
 export function SourceBadge({ status }: { status: SourceStatus }) {
+  const { copy, plural } = useCopy();
   const [open, setOpen] = useState(false);
   const sql = typeof status.detail?.sql === "string" ? status.detail.sql : null;
   const mode =
@@ -56,20 +58,19 @@ export function SourceBadge({ status }: { status: SourceStatus }) {
 
         {status.ok ? (
           <span className="text-white/35">
-            {status.hits} {status.hits === 1 ? "hit" : "hits"} ·{" "}
+            {status.hits} {plural(status.hits, copy.badge.hits)} ·{" "}
             {status.elapsed_ms}ms
           </span>
         ) : (
-          <span className="text-danger">unavailable</span>
+          <span className="text-danger">{copy.badge.unavailable}</span>
         )}
 
-        {status.degraded && <span className="text-accent">partial</span>}
+        {status.degraded && (
+          <span className="text-accent">{copy.badge.partial}</span>
+        )}
         {mode === "fallback" && (
-          <span
-            className="text-accent"
-            title="The model did not produce usable SQL, so a deterministic keyword query was used instead."
-          >
-            fallback
+          <span className="text-accent" title={copy.badge.fallbackTitle}>
+            {copy.badge.fallback}
           </span>
         )}
         {expandable && (
@@ -94,7 +95,8 @@ export function SourceBadge({ status }: { status: SourceStatus }) {
           {sql && (
             <div>
               <p className="mb-2 font-display text-[10px] uppercase tracking-[0.28em] text-white/40">
-                Generated SQL{mode ? ` · ${mode}` : ""}
+                {copy.badge.generatedSql}
+                {mode ? ` · ${mode}` : ""}
               </p>
               <pre className="overflow-x-auto border border-hairline p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-white/70">
                 {sql}
