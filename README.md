@@ -38,6 +38,11 @@ into one shape, fuses the rankings, and streams the answer back over SSE.
   that were actually in the prompt — including inside a list item or a table
   cell — and a number the model invented is dropped and counted, never
   rendered as a link.
+- **An index of what the pictures said.** Drive indexes a PDF's text layer,
+  so a term printed only inside a diagram cannot find its file there — asking
+  for `UART3` returned nothing while the pad was legible on page three. Every
+  transcription is stored and searched locally, so a diagram becomes findable
+  once it has been read. The same rows are the cache.
 - **A vision model reads what the text layer cannot.** A datasheet's
   specifications extract cleanly and still say nothing about which pad is
   UART3. The pages that are mostly picture are rendered and transcribed by a

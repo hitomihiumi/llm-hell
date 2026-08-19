@@ -72,6 +72,7 @@ from app.services.mcp.transport import (
     summarise_exception,
 )
 from app.services.pdf import page_stats, render_pages, select_visual_pages
+from app.services.search import page_index
 
 logger = logging.getLogger("llmhell.mcp.google")
 
@@ -599,10 +600,10 @@ class GoogleWorkspaceConnector:
         # in `_to_hits` and read by enrichment, which has to know whether a
         # hit is a Google Doc or a PDF and has nothing on the hit to tell it.
         self._type_hints: dict[str, str] = {}
-        # (file id, byte length) -> {page index: transcription}. Keyed on
-        # length as well as id so a document edited in Drive is described
-        # again rather than answered from a stale reading.
-        self._page_text: dict[tuple[str, int], dict[int, str]] = {}
+        # file id -> name, remembered from the search report so a page stored
+        # in the index can be shown with the document's real title rather than
+        # its id.
+        self._titles: dict[str, str] = {}
 
     @property
     def _account(self) -> str | None:
@@ -728,11 +729,26 @@ class GoogleWorkspaceConnector:
                 logger.warning("%s enrichment failed: %s", self.key, summarise_exception(exc))
                 result.degraded = True
 
+        # The other half of the search. Drive indexes a PDF's text layer, so a
+        # term printed only inside a diagram never finds its file there -
+        # asking for `UART3` returned nothing while the pad was legible on
+        # page three. Pages this app has transcribed are searched here, and
+        # any document Drive missed is added to the list.
+        from_index = 0
+        if is_drive:
+            try:
+                from_index = await self._add_index_hits(
+                    hits, query=query, limit=limit, ctx=ctx, debug=ctx.debug
+                )
+            except Exception as exc:  # noqa: BLE001 - a local index is an addition, never the result
+                logger.warning("page index lookup failed: %s", summarise_exception(exc))
+
         result.hits = hits
         result.detail = {
             "tool": self._tool,
             "shape": shape,
             "account": self._account,
+            "from_page_index": from_index,
             "enriched": enriched,
         }
         if shape == "unrecognised":
@@ -780,6 +796,9 @@ class GoogleWorkspaceConnector:
                 # enrichment has to tell a Google Doc from a PDF and the hit
                 # itself carries nothing that does.
                 self._type_hints.update(drive_type_hints(raw.text))
+                self._titles.update(
+                    {hit.external_id: hit.title for hit in hits if hit.external_id}
+                )
             return hits, "markdown"
 
         # A genuinely empty result reads "No messages found for query: …",
@@ -848,6 +867,54 @@ class GoogleWorkspaceConnector:
                 hit.snippet = excerpt_around(body, query, SNIPPET_CHARS)
                 enriched += 1
         return enriched
+
+    async def _add_index_hits(
+        self, hits: list[SearchHit], *, query: str, limit: int, ctx: SearchContext, debug: bool
+    ) -> int:
+        """Add documents found only in our own transcriptions. Returns how many.
+
+        Appended rather than merged into the ranking: a page we transcribed is
+        real evidence, but Drive's own hits matched the document's actual text
+        and deserve to come first. Fusion across sources happens above this
+        anyway, so this only decides the order within Drive.
+
+        A document Drive already returned is skipped. It is the same file, and
+        two cards for it would look like two documents.
+        """
+        matched = await page_index.search_pages(
+            ctx.db, query, source_key=self.key, limit=limit
+        )
+        if not matched:
+            return 0
+
+        already = {hit.external_id for hit in hits if hit.external_id}
+        added = 0
+        for external_id, title, url, page_number, text in matched:
+            if external_id in already or len(hits) >= limit:
+                continue
+            hits.append(
+                SearchHit(
+                    id=f"{self.key}:{external_id}",
+                    source=self.key,
+                    kind="document",
+                    external_id=external_id,
+                    title=title or external_id,
+                    # Labelled the same way the merged document labels it, so
+                    # a reader can tell a machine reading of a picture from
+                    # text the document actually contains.
+                    snippet=excerpt_around(
+                        f"[page {page_number + 1}, read from the page image]\n{text}",
+                        query,
+                        self._settings.answer_snippet_chars,
+                    ),
+                    url=url,
+                    rank_in_source=len(hits),
+                    raw={"from": "page_index", "page": page_number + 1} if debug else None,
+                )
+            )
+            already.add(external_id)
+            added += 1
+        return added
 
     async def _type_of(self, file_id: str) -> str | None:
         """The file's type, from the last search if it is still remembered and
@@ -925,9 +992,12 @@ class GoogleWorkspaceConnector:
         built against extracts 6k characters of specifications and still says
         nothing about which pad is UART3 TX.
 
-        Transcriptions are cached per page for the life of the process. They
-        do not depend on the question, so re-describing the same page for
-        every search would be paying a GPU to produce a string we already had.
+        Transcriptions are stored in `document_pages` rather than held in
+        memory. They do not depend on the question, so re-describing a page
+        for every search would be paying a GPU to produce a string we already
+        have - and a process-local cache loses that on every deploy. Stored,
+        they are also searchable, which is what makes a diagram findable at
+        all: see `services/search/page_index.py`.
         """
         data = await self._read_pdf_bytes(file_id)
         if data is None:
@@ -936,7 +1006,7 @@ class GoogleWorkspaceConnector:
         text_layer = extract_pdf_text(data, limit=self._settings.google_pdf_max_chars)
 
         endpoint = ctx.vision_endpoint if ctx else None
-        if endpoint is None or self._settings.vision_max_pages <= 0:
+        if ctx is None or endpoint is None or self._settings.vision_max_pages <= 0:
             return text_layer
 
         stats = page_stats(data)
@@ -944,8 +1014,13 @@ class GoogleWorkspaceConnector:
         if not wanted:
             return text_layer
 
-        fingerprint = (file_id, len(data))
-        cached = self._page_text.setdefault(fingerprint, {})
+        # Byte length identifies the version. An edited document keeps its
+        # Drive id, and answering from a reading of the old one is worse than
+        # not answering: nothing on the page would say it is stale.
+        fingerprint = str(len(data))
+        cached = await page_index.load_pages(
+            ctx.db, source_key=self.key, external_id=file_id, fingerprint=fingerprint
+        )
         missing = [index for index in wanted if index not in cached]
 
         if missing:
@@ -958,11 +1033,23 @@ class GoogleWorkspaceConnector:
             described = await vision.describe_pages(
                 endpoint, images, http_client=ctx.http_client
             )
-            # Remember the misses too: a page the model said nothing about
-            # will say nothing about it next time either, and re-rendering it
-            # on every search is the expensive half.
-            for index in missing:
-                cached[index] = described.get(index, "")
+            # The misses are stored too. A page the model said nothing about
+            # will say nothing next time either, and rendering it again on
+            # every search is the expensive half.
+            fresh = {index: described.get(index, "") for index in missing}
+            cached.update(fresh)
+            try:
+                await page_index.save_pages(
+                    ctx.db,
+                    source_key=self.key,
+                    external_id=file_id,
+                    fingerprint=fingerprint,
+                    title=self._titles.get(file_id, file_id),
+                    url=drive_url(file_id, self._type_hints.get(file_id, "")),
+                    pages=fresh,
+                )
+            except Exception as exc:  # noqa: BLE001 - an unindexed page is not a failed search
+                logger.warning("could not index pages of %s: %s", file_id, summarise_exception(exc))
 
         return vision.merge(text_layer, {index: cached[index] for index in wanted if cached.get(index)})
 
