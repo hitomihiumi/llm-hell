@@ -19,7 +19,7 @@ Two endpoints are needed, and they do different jobs:
 docker compose exec api python manage.py add-endpoint \
   --name "DeepSeek V4 Flash (OpenRouter)" \
   --base-url https://openrouter.ai/api/v1 \
-  --model-id deepseek/deepseek-v4-flash \
+  --model-id deepseek/deepseek-v4-flash-0731 \
   --api-key sk-or-v1-... --role executor --ctx-window 131072
 ```
 
@@ -34,7 +34,7 @@ docker compose exec api python manage.py add-endpoint \
 Then in `.env`:
 
 ```
-ANSWER_MODEL_ID=deepseek/deepseek-v4-flash
+ANSWER_MODEL_ID=deepseek/deepseek-v4-flash-0731
 VISION_MODEL_ID=qwen/qwen3-vl-8b-instruct
 VISION_CONCURRENCY=4
 ```
@@ -47,10 +47,11 @@ enabled endpoint, while vision simply switches off.
 
 ## Choosing the model ids
 
-`deepseek/deepseek-v4-flash-0731` is the same checkpoint as the self-hosted
-one. `deepseek/deepseek-v4-flash` tracks the latest revision and is cheaper.
-Either works; pin the dated one if you need answers to stay comparable with
-what a local pod produced.
+`deepseek/deepseek-v4-flash-0731` is the dated checkpoint — the same weights
+`run_serving.sh` downloads from Hugging Face, so answers stay comparable with
+anything a local pod produced. That is why it is pinned here rather than
+`deepseek/deepseek-v4-flash`, which tracks the latest revision and is about
+40% cheaper but can change under you.
 
 **Take `qwen/qwen3-vl-8b-instruct`, not `qwen/qwen3-vl-8b-thinking`.** Both
 exist and only one is usable here. The thinking variant spends its whole token
@@ -75,8 +76,8 @@ An `input_modalities` without `image` cannot do this job at all.
 ## What it costs
 
 A page is one request: roughly 1200 prompt tokens for the image plus a few
-hundred of output. At `qwen3-vl-8b-instruct` prices that is about **$0.0003 a
-page**, so a four-page datasheet costs a third of a cent — **once**. The
+hundred of output. At `qwen/qwen3-vl-8b-instruct` prices ($0.117 / $0.455 per
+million) that is about **$0.0003 a page**, so a four-page datasheet costs a third of a cent — **once**. The
 transcription is stored in `document_pages` and never recomputed, so the
 second search over the same document is free.
 
@@ -87,6 +88,25 @@ Two bounds keep it that way, and both matter more now that pages are billed:
   spends the budget on diagrams and skips the prose.
 - Reading happens **once per document version**, in the background, and blank
   pages are recorded as blank so they are not retried.
+
+---
+
+## Without a key
+
+Worth knowing what it looks like, because it is not a crash. The search still
+runs and still returns hits — the Postgres source falls back to its
+deterministic query rather than asking a model for SQL — and the answer reads:
+
+```
+(no answer: deepseek/deepseek-v4-flash-0731 returned 401: ...)
+```
+
+So a missing or expired key costs the answer and the illustrations, never the
+result list. Add it to both endpoints with:
+
+```bash
+docker compose exec api python manage.py update-endpoint <endpoint_id> --api-key sk-or-v1-...
+```
 
 ---
 
