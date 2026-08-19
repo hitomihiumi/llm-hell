@@ -8,6 +8,7 @@ renders are therefore correct by construction - a fabricated reference
 cannot become a link, because a link only exists where a real hit was found.
 """
 
+import base64
 import logging
 import re
 from collections.abc import AsyncIterator
@@ -141,14 +142,21 @@ def build_prompt(
     *,
     settings: Settings,
     history: list[Any] | None = None,
-) -> tuple[list[dict[str, str]], list[SearchHit]]:
+    images: dict[str, list[bytes]] | None = None,
+) -> tuple[list[dict[str, Any]], list[SearchHit]]:
     """Pack as many hits as fit, and report which ones made it.
 
     Returns the messages plus the hits actually included, in order - the
     caller needs that list to resolve citations, because `[3]` means "the
     third hit in the prompt", not "the third search result".
+
+    `images` maps a hit id to page pictures, which are attached to the same
+    turn as the text. One model, one pass: it reads the diagram and the
+    search results together rather than answering from somebody else's
+    description of the diagram.
     """
     history_messages = _history_messages(history)
+    images = images or {}
 
     budget = endpoint.ctx_window - settings.answer_max_output_tokens - settings.answer_ctx_reserve_tokens
     overhead = heuristic_token_count(
@@ -175,12 +183,30 @@ def build_prompt(
         remaining -= cost
 
     context = "\n\n".join(blocks) if blocks else "(no results were found)"
+    turn = f"Question: {question}\n\nSearch results:\n\n{context}"
+
+    # Each picture is announced by the number that cites it, so `[2]` means
+    # the same thing whether the model took it from a snippet or from a page.
+    attachments: list[dict[str, Any]] = []
+    for position, hit in enumerate(included, start=1):
+        for offset, page in enumerate(images.get(hit.id, []), start=1):
+            encoded = base64.b64encode(page).decode("ascii")
+            attachments.append({"type": "text", "text": f"[{position}] page image {offset}:"})
+            attachments.append(
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
+            )
+
+    # A plain string when there is nothing to attach: a text-only server
+    # should not be handed the multimodal list form for a question that never
+    # needed it.
+    content: Any = [{"type": "text", "text": turn}, *attachments] if attachments else turn
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         # History sits between the system prompt and the current turn, so the
         # results are the last thing the model reads.
         *history_messages,
-        {"role": "user", "content": f"Question: {question}\n\nSearch results:\n\n{context}"},
+        {"role": "user", "content": content},
     ]
     return messages, included
 
@@ -221,12 +247,13 @@ async def synthesize(
     settings: Settings,
     http_client: httpx.AsyncClient,
     history: list[Any] | None = None,
+    images: dict[str, list[bytes]] | None = None,
 ) -> AnswerResult:
     """Non-streaming answer."""
     if endpoint is None:
         return AnswerResult(error="no model endpoint is registered")
 
-    messages, included = build_prompt(question, hits, endpoint, settings=settings, history=history)
+    messages, included = build_prompt(question, hits, endpoint, settings=settings, history=history, images=images)
     try:
         completion = await chat.complete(
             endpoint,
@@ -260,6 +287,7 @@ async def synthesize_stream(
     settings: Settings,
     http_client: httpx.AsyncClient,
     history: list[Any] | None = None,
+    images: dict[str, list[bytes]] | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
     """Yield ("reasoning"|"token"|"done"|"error", payload).
 
@@ -271,7 +299,7 @@ async def synthesize_stream(
         yield "error", {"message": "no model endpoint is registered"}
         return
 
-    messages, included = build_prompt(question, hits, endpoint, settings=settings, history=history)
+    messages, included = build_prompt(question, hits, endpoint, settings=settings, history=history, images=images)
     parser = ReasoningStreamParser((endpoint.reasoning_profile or {}).get("parse", {}))
 
     text_parts: list[str] = []

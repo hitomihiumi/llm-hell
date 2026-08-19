@@ -16,7 +16,40 @@ They may be one endpoint or two. `ANSWER_MODEL_ID` and `VISION_MODEL_ID` are
 matched against the `model_id` of any **enabled** endpoint, so pointing both
 at the same multimodal model needs one row and no special case.
 
-## One model for both
+## One model, one pass
+
+The default now: pages of a PDF go **into the answer prompt** as pictures,
+beside the text results, and the same multimodal model reads both and answers.
+There is no transcription step and nothing between the picture and the answer.
+
+Proven by turning it off. Same model, same document, same question — "in the
+multirotor wiring diagram, how many motors are drawn and where is the 4in1 ESC
+placed?":
+
+| | answer |
+| --- | --- |
+| `ANSWER_IMAGE_HITS=2` | "there are **4 motors** drawn [1]. The 4in1 ESC is placed **below** the flight controller [1]." |
+| `ANSWER_IMAGE_HITS=0` | "the text does not specify the number of motors drawn or the physical placement" |
+
+`ANSWER_IMAGE_HITS` bounds how many hits may bring their pages; images are the
+expensive part of a prompt and the second PDF in a list is rarely the one the
+question was about. `VISION_MAX_PAGES` still chooses which pages, by how much
+of them is picture rather than text.
+
+Setting `ANSWER_IMAGE_HITS=0` returns to text-only answering, which is what a
+non-multimodal answer model needs.
+
+### The transcription path is still there, and is now optional
+
+`VISION_MODEL_ID` drives a separate pass that describes pages and stores the
+result in `document_pages`. That is **not** needed for answering any more — it
+exists for **retrieval**, because Drive indexes a PDF's text layer and cannot
+find a term printed only inside a diagram. Leave it empty and answers still
+see the pictures; set it and diagram terms also become searchable.
+
+---
+
+## One model for both roles
 
 The simplest setup, if the model accepts images:
 

@@ -24,14 +24,17 @@ from app.core.db import get_db
 from app.core.sessions import CurrentUser, require_csrf
 from app.models.endpoint import ModelEndpoint
 from app.models.search_query import SearchQuery
+from app.models.source import SOURCE_GOOGLE_DRIVE
 from app.models.user import User
 from app.schemas.search import (
     AnswerOut,
+    SearchHit,
     SearchQueryOut,
     SearchRequest,
     SearchResponse,
 )
 from app.services.mcp.connector import SearchContext
+from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.registry import McpRegistry, get_mcp_registry
 from app.services.search import answer as answer_service
 from app.services.search.service import federated_search
@@ -117,6 +120,44 @@ async def _persist_answer(db: AsyncSession, record: SearchQuery, result: answer_
     await db.commit()
 
 
+async def _page_images(
+    hits: list[SearchHit], registry: McpRegistry, settings: Settings
+) -> dict[str, list[bytes]]:
+    """Page pictures for the PDF hits about to be answered from.
+
+    One model, one pass: the pages go into the answer prompt beside the text
+    results rather than being described first by a second model. Nothing sits
+    between the picture and the answer, so nothing a transcriber failed to
+    mention can be lost.
+
+    Bounded by `answer_image_hits` because images are the expensive part of a
+    prompt, and by the page cap inside the connector. Failures are swallowed -
+    an answer written from the text alone is the previous behaviour, not a
+    broken search.
+    """
+    if not settings.answer_image_hits:
+        return {}
+
+    connector = registry.get(SOURCE_GOOGLE_DRIVE)
+    if not isinstance(connector, GoogleWorkspaceConnector):
+        return {}
+
+    images: dict[str, list[bytes]] = {}
+    for hit in hits:
+        if len(images) >= settings.answer_image_hits:
+            break
+        if hit.source != SOURCE_GOOGLE_DRIVE:
+            continue
+        try:
+            pages = await connector.page_images(hit.id)
+        except Exception as exc:  # noqa: BLE001 - pictures are a bonus
+            logger.warning("could not render pages of %s: %s", hit.id, exc)
+            continue
+        if pages:
+            images[hit.id] = pages
+    return images
+
+
 @router.post("/search", response_model=SearchResponse)
 async def search(
     payload: SearchRequest,
@@ -157,6 +198,7 @@ async def search(
             settings=settings,
             http_client=http_client,
             history=payload.history,
+            images=await _page_images(federated.hits, registry, settings),
         )
         await _record_answer_telemetry(
             db, user=current, endpoint=endpoint, query_id=record.id, result=result, started_at=started_at
@@ -254,6 +296,7 @@ async def search_stream(
             settings=settings,
             http_client=http_client,
             history=payload.history,
+            images=await _page_images(federated.hits, registry, settings),
         ):
             if kind == "done":
                 final = data

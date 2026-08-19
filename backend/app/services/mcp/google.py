@@ -924,6 +924,43 @@ class GoogleWorkspaceConnector:
             added += 1
         return added
 
+    async def page_images(self, hit_id: str, *, max_pages: int | None = None) -> list[bytes]:
+        """The pages of a PDF hit, rendered, for the answer model to look at.
+
+        This is the single-pass path: rather than having one model describe a
+        page and another answer from the description, the page itself goes
+        into the answer prompt. Nothing is transcribed, nothing is stored, and
+        nothing can be lost in between - the model sees what the reader would
+        see.
+
+        Rendering is local and the file is already on the shared mount, so the
+        cost is a read and a few hundred milliseconds, not a model call.
+        Returns [] for anything that is not a PDF, which is most hits.
+        """
+        prefix, _, file_id = hit_id.partition(":")
+        if prefix != self.key or not file_id:
+            return []
+        if not is_pdf(await self._type_of(file_id)):
+            return []
+
+        data = await self._read_pdf_bytes(file_id)
+        if data is None:
+            return []
+
+        wanted = select_visual_pages(
+            page_stats(data), max_pages=max_pages or self._settings.vision_max_pages
+        )
+        if not wanted:
+            return []
+
+        rendered = render_pages(
+            data,
+            wanted,
+            scale=self._settings.vision_scale,
+            quality=self._settings.vision_jpeg_quality,
+        )
+        return [rendered[index] for index in sorted(rendered)]
+
     async def _type_of(self, file_id: str) -> str | None:
         """The file's type, from the last search if it is still remembered and
         from the server otherwise."""

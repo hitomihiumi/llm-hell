@@ -151,6 +151,11 @@ class Settings(BaseSettings):
     # a failed page is a missing illustration rather than an error. Set this
     # to 1 for anything serving from a single card.
     vision_concurrency: int = 4
+
+    # How many hits may bring their pages into the answer prompt. Images are
+    # the expensive part of a request, and the second PDF in a result list is
+    # rarely the one the question was about.
+    answer_image_hits: int = 2
     google_mcp_command: str = "npx"
     google_mcp_args: list[str] = ["-y", "@aaronsb/google-workspace-mcp"]
     google_client_id: str = ""
