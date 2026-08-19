@@ -4,12 +4,48 @@ The app calls any endpoint that speaks the OpenAI chat API, so a hosted
 gateway and a self-hosted vLLM server are the same thing to it — only the URL,
 the key and the model id differ. Nothing in the code special-cases OpenRouter.
 
-Two endpoints are needed, and they do different jobs:
+Two jobs are done, and they are separate concerns even when one model does
+both:
 
 | role | what it does | why it is separate |
 | --- | --- | --- |
 | **answer** | reads the fused search results and writes the cited answer | reasons; sees the question |
 | **vision** | turns a PDF page image into text | transcribes; never sees the question |
+
+They may be one endpoint or two. `ANSWER_MODEL_ID` and `VISION_MODEL_ID` are
+matched against the `model_id` of any **enabled** endpoint, so pointing both
+at the same multimodal model needs one row and no special case.
+
+## One model for both
+
+The simplest setup, if the model accepts images:
+
+```bash
+docker compose exec api python manage.py add-endpoint   --name "Gemma 4 31B (OpenRouter)"   --base-url https://openrouter.ai/api/v1   --model-id google/gemma-4-31b-it   --api-key sk-or-v1-... --role executor --ctx-window 262144
+```
+
+```
+ANSWER_MODEL_ID=google/gemma-4-31b-it
+VISION_MODEL_ID=google/gemma-4-31b-it
+```
+
+Measured against the two-model setup on the same datasheet and the same
+questions:
+
+| | Gemma 4 31B, both roles | DeepSeek + Qwen3-VL |
+| --- | --- | --- |
+| probe image | 4/4 words, **39s** | 4/4 words, **1s** |
+| 4-page datasheet | ~150s | ~30s |
+| text2sql | 4.5s, `mode=llm` | 2.4s, `mode=llm` |
+| answer on a diagram | conservative — states only what the transcription supports | inferred pin pairings the transcription did not contain |
+
+One model is simpler to run and to reason about, and its answers stuck closer
+to the evidence. It is markedly slower at images — which matters less than it
+looks, because transcription happens once per document, in the background,
+and is then cached forever.
+
+A `:free` variant of the same model exists and is rate-limited; use it to try
+the setup, not to demonstrate it.
 
 ---
 

@@ -60,7 +60,7 @@ export default async function AppLayout({
         <header className="sticky top-0 z-50 border-b border-hairline bg-black/80 backdrop-blur-md">
           <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-8 px-6 md:px-10">
             <Link
-              href="/search"
+              href="/chat"
               className="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
             >
               <Wordmark className="h-5" />

@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # Headroom left free inside ctx_window for the system prompt, the
     # question, and the chat template's own overhead.
     answer_ctx_reserve_tokens: int = 2048
-    answer_temperature: float = 0.2
+    answer_temperature: float = 0.7
 
     # --- Search federation ------------------------------------------------
     # Wall clock for one source's entire search(), which may span several

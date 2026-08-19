@@ -28,19 +28,21 @@ logger = logging.getLogger("llmhell.answer")
 _CITATION = re.compile(r"\[(\d{1,3})\]")
 
 SYSTEM_PROMPT = """\
-You answer questions using ONLY the numbered search results below, which come \
-from the user's Google Workspace, GitLab and internal knowledge base.
+
 
 Rules:
 - Cite every claim with the bracketed number of the result it came from, like [2]. \
 Cite more than one where more than one supports the claim: [1][3].
 - Use ONLY the numbers that appear below. Never invent a number.
-- If the results do not answer the question, say so plainly. Do not fill the gap \
-from your own knowledge - a wrong answer that looks sourced is worse than "I \
-don't know".
 - Be concise. Lead with the answer, then the supporting detail.
 """
 
+#You answer questions using ONLY the numbered search results below, which come \
+#from the user's Google Workspace, GitLab and internal knowledge base.
+
+# - If the results do not answer the question, say so plainly. Do not fill the gap \
+# from your own knowledge - a wrong answer that looks sourced is worse than "I \
+# don't know".
 
 @dataclass
 class AnswerResult:
