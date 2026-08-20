@@ -219,3 +219,12 @@ test("an unreachable backend names the address rather than the stack", async () 
 
   await assert.rejects(() => kb.sources(), /Could not reach http:\/\/127\.0\.0\.1:1/);
 });
+
+test("a stored password counts as signed in across a restart", async () => {
+  /* A session lives in memory, so a restarted editor has none - and the view
+     would offer "Sign in" to somebody who already had. */
+  fresh();
+
+  assert.equal(await client(PASSWORD).hasCredentials(), true);
+  assert.equal(await client().hasCredentials(), false);
+});

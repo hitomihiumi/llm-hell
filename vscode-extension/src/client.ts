@@ -76,6 +76,19 @@ export class KnowledgeBaseClient {
     return this.cookies.has(SESSION_COOKIE);
   }
 
+  /**
+   * Whether a sign-in could be attempted without asking for anything.
+   *
+   * Read on activation, because a session lives in memory and a restarted
+   * editor has none — while the credential that would establish one has been
+   * in the keychain since the first sign-in. Without this the view would
+   * offer "Sign in" to somebody who already had.
+   */
+  async hasCredentials(): Promise<boolean> {
+    const { username } = this.settings();
+    return Boolean(username) && Boolean(await this.secrets.get(PASSWORD_KEY));
+  }
+
   /** Store a password and prove it works by signing in with it. */
   async signIn(credentials: Credentials): Promise<void> {
     await this.login(credentials);

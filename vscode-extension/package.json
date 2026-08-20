@@ -76,7 +76,13 @@
     "viewsWelcome": [
       {
         "view": "knowledgeBase.results",
-        "contents": "Nothing searched yet.\n[Search the knowledge base](command:knowledgeBase.search)\n\nA question needs an account on the backend.\n[Sign in](command:knowledgeBase.signIn)"
+        "when": "!knowledgeBase.signedIn",
+        "contents": "Searching needs an account on the backend.\n[Sign in](command:knowledgeBase.signIn)\n\nPoint `knowledgeBase.baseUrl` at the API \u2014 the backend on :8000, not the web app on :3001.\n[Open settings](command:workbench.action.openSettings?%22knowledgeBase%22)"
+      },
+      {
+        "view": "knowledgeBase.results",
+        "when": "knowledgeBase.signedIn",
+        "contents": "Nothing searched yet.\n[Search](command:knowledgeBase.search)\n\nOr select something in the editor and press Ctrl+Alt+K.\n[Choose sources](command:knowledgeBase.chooseSources)"
       }
     ],
     "commands": [

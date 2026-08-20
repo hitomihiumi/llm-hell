@@ -18,6 +18,16 @@ import type { SearchHit, SearchResponse } from "./types";
 /** Where the chosen source filter lives. Per window, so two projects can differ. */
 const SOURCES_KEY = "knowledgeBase.sources";
 
+/**
+ * What the welcome screen switches on.
+ *
+ * A view with no children shows its `viewsWelcome` content, and there are two
+ * of them - one offering to sign in, one offering to search. Without a context
+ * key to pick between them the panel says "Sign in" to somebody who has just
+ * signed in, and looks like nothing happened.
+ */
+const SIGNED_IN_CONTEXT = "knowledgeBase.signedIn";
+
 export function activate(context: vscode.ExtensionContext): void {
   const client = new KnowledgeBaseClient(context.secrets, readSettings);
   const documents = new KnowledgeBaseDocuments();
@@ -28,15 +38,36 @@ export function activate(context: vscode.ExtensionContext): void {
     showCollapseAll: true,
   });
 
+  async function setSignedIn(value: boolean): Promise<void> {
+    await vscode.commands.executeCommand("setContext", SIGNED_IN_CONTEXT, value);
+    // Then ask the view to redraw. The context change should be enough on its
+    // own; this costs nothing and removes the question.
+    results.show(results.current);
+  }
+
+  /** Sign in and reflect it, wherever the prompt came from. */
+  async function authenticate(): Promise<boolean> {
+    const ok = await signIn(client);
+    if (ok) await setSignedIn(true);
+    return ok;
+  }
+
+  // A session lives in memory, so a restarted editor has none - but the
+  // credential that would establish one has been in the keychain since the
+  // first sign-in. Asked here rather than assumed, so the panel opens in the
+  // state the user left it in.
+  void client.hasCredentials().then(setSignedIn);
+
   context.subscriptions.push(
     view,
     vscode.workspace.registerTextDocumentContentProvider(SCHEME, documents),
 
-    vscode.commands.registerCommand("knowledgeBase.signIn", () => signIn(client)),
+    vscode.commands.registerCommand("knowledgeBase.signIn", authenticate),
 
     vscode.commands.registerCommand("knowledgeBase.signOut", async () => {
       await client.signOut();
       results.show(undefined);
+      await setSignedIn(false);
       vscode.window.showInformationMessage("Signed out of the knowledge base.");
     }),
 
@@ -64,7 +95,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand("knowledgeBase.chooseSources", () =>
-      chooseSources(client, context),
+      chooseSources(client, context, authenticate),
     ),
 
     vscode.commands.registerCommand("knowledgeBase.showAnswer", () => {
@@ -77,7 +108,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand("knowledgeBase.openHit", (hit: SearchHit) =>
-      openHit(client, documents, hit),
+      openHit(client, documents, hit, authenticate),
     ),
 
     vscode.commands.registerCommand("knowledgeBase.openExternal", (node?: { hit?: SearchHit }) => {
@@ -96,7 +127,15 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
-  async function run(query: string): Promise<void> {
+  /**
+   * One search, and one retry if signing in was what it needed.
+   *
+   * The retry is the whole point of the flag. Searching while signed out puts
+   * up a toast with a "Sign In" button; without this, pressing it succeeds and
+   * then nothing happens, and the user has to remember what they were doing
+   * and ask again.
+   */
+  async function run(query: string, retried = false): Promise<void> {
     const settings = readSettings();
     const sources = context.workspaceState.get<string[]>(SOURCES_KEY) ?? settings.sources;
 
@@ -112,7 +151,8 @@ export function activate(context: vscode.ExtensionContext): void {
           }),
       );
     } catch (error) {
-      await report(error, client);
+      const signedIn = await report(error, authenticate);
+      if (signedIn && !retried) await run(query, true);
       return;
     }
 
@@ -193,7 +233,8 @@ async function ask(value: string): Promise<string | undefined> {
   return query?.trim() || undefined;
 }
 
-async function signIn(client: KnowledgeBaseClient): Promise<void> {
+/** Returns whether a session was established, so the caller can act on it. */
+async function signIn(client: KnowledgeBaseClient): Promise<boolean> {
   const config = vscode.workspace.getConfiguration("knowledgeBase");
   const username = await vscode.window.showInputBox({
     title: "Knowledge base",
@@ -201,7 +242,7 @@ async function signIn(client: KnowledgeBaseClient): Promise<void> {
     value: config.get<string>("username", ""),
     ignoreFocusOut: true,
   });
-  if (!username) return;
+  if (!username) return false;
 
   const password = await vscode.window.showInputBox({
     title: "Knowledge base",
@@ -209,30 +250,32 @@ async function signIn(client: KnowledgeBaseClient): Promise<void> {
     password: true,
     ignoreFocusOut: true,
   });
-  if (!password) return;
+  if (!password) return false;
 
   try {
     await client.signIn({ username, password });
   } catch (error) {
     vscode.window.showErrorMessage(`Could not sign in: ${(error as Error).message}`);
-    return;
+    return false;
   }
 
   // Written to the settings only after the credentials are known to work, so
   // a typo does not become the saved username.
   await config.update("username", username, vscode.ConfigurationTarget.Global);
   vscode.window.showInformationMessage(`Signed in as ${username}.`);
+  return true;
 }
 
 async function chooseSources(
   client: KnowledgeBaseClient,
   context: vscode.ExtensionContext,
+  authenticate: () => Promise<boolean>,
 ): Promise<void> {
   let available: { key: string; display_name: string; enabled: boolean }[];
   try {
     available = await client.sources();
   } catch (error) {
-    await report(error, client);
+    await report(error, authenticate);
     return;
   }
 
@@ -266,6 +309,7 @@ async function openHit(
   client: KnowledgeBaseClient,
   documents: KnowledgeBaseDocuments,
   hit: SearchHit,
+  authenticate: () => Promise<boolean>,
 ): Promise<void> {
   const uri = hitUri(hit);
   try {
@@ -290,7 +334,7 @@ async function openHit(
       await vscode.env.openExternal(vscode.Uri.parse(hit.url));
       return;
     }
-    await report(error, client);
+    await report(error, authenticate);
   }
 }
 
@@ -309,12 +353,17 @@ async function openAnswer(
   });
 }
 
-/** One place that turns a thrown error into something worth reading. */
-async function report(error: unknown, client: KnowledgeBaseClient): Promise<void> {
+/**
+ * One place that turns a thrown error into something worth reading.
+ *
+ * Returns whether the user signed in as a result, so the caller can do again
+ * whatever it was that needed the session.
+ */
+async function report(error: unknown, authenticate: () => Promise<boolean>): Promise<boolean> {
   if (error instanceof AuthError) {
     const action = await vscode.window.showErrorMessage(error.message, "Sign In");
-    if (action === "Sign In") await signIn(client);
-    return;
+    return action === "Sign In" ? await authenticate() : false;
   }
   vscode.window.showErrorMessage((error as Error).message ?? String(error));
+  return false;
 }

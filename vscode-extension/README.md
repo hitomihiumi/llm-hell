@@ -54,6 +54,13 @@ secret storage — the OS keychain — and never into a settings file. The
 username is written to settings only after the credentials are known to work,
 so a typo does not become the saved username.
 
+The panel then switches from offering to sign in to offering to search, and
+stays that way across restarts: a session lives in memory and a reopened
+editor has none, but the credential that establishes one is still in the
+keychain, so the panel opens in the state it was left in. Searching while
+signed out puts up a toast with a **Sign In** button, and pressing it runs the
+search that was asked for rather than leaving you to ask again.
+
 ### Why a password and not an API key
 
 The backend has two authentication mechanisms and keeps them deliberately
