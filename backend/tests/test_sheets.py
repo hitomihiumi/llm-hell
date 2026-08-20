@@ -132,3 +132,101 @@ def test_the_row_asked_about_outranks_the_header_band():
     trimmed = sheets.excerpt(REPORT, "3d print parts", 130)
 
     assert "3D print parts for the Team Object" in trimmed
+
+
+# --- the tabs -----------------------------------------------------------------
+
+# A workbook's `get` report. The tab list is the only place the other sheets
+# are named: a range read with no sheet name returns the first one and says
+# nothing about the rest.
+METADATA = """## Wisco Wingmen Gantt Chart
+
+**Spreadsheet ID:** 1fSpOH
+**Locale:** en_US
+
+### Sheets (3)
+- **Fall Semester** (sheetId: 0) - 1027 rows x 38 cols
+- **Spring Semester** (sheetId: 298147837) - 1013 rows x 26 cols
+- **Condensed Gantt Chart** (sheetId: 251364932) - 978 rows x 31 cols
+
+---
+**Next steps:**
+- Read a range: `manage_sheets`
+"""
+
+SPRING = """## 'Spring Semester'!A1:Z1000
+
+R 2:  | Week | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+R 3:  |  | Jan |  | Feb |  |  |  | Mar
+R 4:  | Task | 19 | 26 | 2 | 9 | 16 | 23 | 2 | 9 | 16
+R26:  | Landing Gear - Design |  |  |  |  |  |  |  |  | X
+R40:  | X = Completed Tasks, O = Milestone Deadlines
+"""
+
+
+def test_the_other_tabs_are_found():
+    """The failure this fixes: asked when the landing gear was designed -
+    March, on the spring tab - the answer came from the September tab, which
+    is the only one a range read without a sheet name ever returns."""
+    assert sheets.parse_tab_names(METADATA) == [
+        "Fall Semester",
+        "Spring Semester",
+        "Condensed Gantt Chart",
+    ]
+
+
+def test_a_report_with_no_tab_list_names_none():
+    assert sheets.parse_tab_names(REPORT) == []
+    assert sheets.parse_tab_names("") == []
+
+
+def test_a_tab_becomes_a_range():
+    assert sheets.a1_range("Spring Semester") == "'Spring Semester'!A1:AZ1000"
+
+
+def test_an_apostrophe_in_a_tab_name_is_doubled():
+    """A1 notation escapes a quote by doubling it. Without this, a sheet
+    called "Bob's plan" makes a range the API rejects."""
+    assert sheets.a1_range("Bob's plan").startswith("'Bob''s plan'!")
+
+
+def test_every_tab_reaches_the_answer():
+    both = sheets.excerpt_tabs([REPORT, SPRING], "landing gear design", 10_000)
+
+    assert "3D print parts for the Team Object" in both
+    assert "Landing Gear - Design" in both
+
+
+def test_the_tab_the_question_is_about_is_served_first():
+    """Budget follows the question. Otherwise the tab that happens to come
+    first in the workbook crowds out the one that answers."""
+    tight = sheets.excerpt_tabs([REPORT, SPRING], "landing gear design", 700)
+
+    assert "Landing Gear - Design" in tight
+
+
+def test_a_crowded_tab_still_contributes_its_header_band():
+    """Reduced to nothing, a tab is indistinguishable from a tab that does
+    not exist - and its absence is invisible in the answer."""
+    tight = sheets.excerpt_tabs([REPORT, SPRING], "landing gear design", 700)
+
+    assert "Fall Semester" in tight
+
+
+def test_tabs_come_back_in_the_workbooks_order():
+    """Served by relevance, reassembled by position: a reader checking this
+    against the real spreadsheet should find the tabs where they live."""
+    both = sheets.excerpt_tabs([REPORT, SPRING], "landing gear design", 10_000)
+
+    assert both.index("Fall Semester") < both.index("Spring Semester")
+
+
+def test_one_tab_is_just_the_sheet():
+    assert sheets.excerpt_tabs([REPORT], "3d print", 10_000) == sheets.excerpt(REPORT, "3d print", 10_000)
+    assert sheets.excerpt_tabs([], "3d print", 10_000) == ""
+
+
+def test_rendering_every_tab_keeps_them_apart():
+    whole = sheets.render_tabs([REPORT, SPRING])
+
+    assert whole.count("sheet: ") == 2

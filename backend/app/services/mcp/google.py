@@ -1073,9 +1073,9 @@ class GoogleWorkspaceConnector:
                     # be windowed like prose: the rows that give a cell its
                     # meaning are the header band and the legend, which are
                     # never next to the row that matched. See services/sheets.
-                    report = await self._read_sheet_text(hit.external_id)
-                    if report:
-                        hit.snippet = sheets.excerpt(report, query, self._settings.answer_sheet_chars)
+                    reports = await self._read_sheet_tabs(hit.external_id)
+                    if reports:
+                        hit.snippet = sheets.excerpt_tabs(reports, query, self._settings.answer_sheet_chars)
                         if hit.snippet:
                             hit.snippet_format = "grid"
                             enriched += 1
@@ -1334,12 +1334,15 @@ class GoogleWorkspaceConnector:
             return None
         return await self._export_file(file_id, mime_type)
 
-    async def _read_sheet_text(self, file_id: str) -> str | None:
+    async def _read_sheet_text(self, file_id: str, tab: str | None = None) -> str | None:
         """Read a bounded range from a Google Sheet via manage_sheets.
 
-        This avoids the Drive export size limit.  A1:Z1000 covers the first
-        thousand rows and 26 columns; that is enough for typical planning
+        This avoids the Drive export size limit.  A1:AZ1000 covers the first
+        thousand rows and 52 columns; that is enough for typical planning
         spreadsheets while staying within the Sheets API read limit.
+
+        Without `tab` this reads the workbook's FIRST sheet, which is a trap
+        rather than a default - see `_read_sheet_tabs`.
         """
         try:
             raw = await self._call(
@@ -1348,13 +1351,54 @@ class GoogleWorkspaceConnector:
                     "email": self._account,
                     "operation": "read",
                     "spreadsheetId": file_id,
-                    "range": "A1:AZ1000",
+                    "range": sheets.a1_range(tab) if tab else "A1:AZ1000",
                 },
             )
         except Exception as exc:  # noqa: BLE001 - a sheet that will not read is not fatal
             logger.info("could not read sheet %s: %s", file_id, summarise_exception(exc))
             return None
         return raw.text
+
+    async def _read_sheet_tabs(self, file_id: str) -> list[str]:
+        """Every tab of a workbook, as manage_sheets reports.
+
+        A range read with no sheet name silently returns the FIRST tab, and
+        nothing in the response says the others exist. "Wisco Wingmen Gantt
+        Chart" holds Fall Semester, Spring Semester and a condensed view;
+        asked when the landing gear was designed - March, on the spring tab -
+        the answer came back confident, cited the file, and was about the
+        wrong half of the year.
+
+        Bounded by `google_sheet_tabs`: each tab is a round trip, and a
+        workbook with thirty of them is not a document anybody is citing.
+        Falls back to the default read whenever the tab list cannot be had,
+        so this can only ever add sheets, never lose the one we already had.
+        """
+        limit = max(1, self._settings.google_sheet_tabs)
+        try:
+            raw = await self._call(
+                "manage_sheets",
+                {"email": self._account, "operation": "get", "spreadsheetId": file_id},
+            )
+            names = sheets.parse_tab_names(raw.text)
+        except Exception as exc:  # noqa: BLE001 - the single-tab read still works
+            logger.info("could not list tabs of %s: %s", file_id, summarise_exception(exc))
+            names = []
+
+        if len(names) <= 1:
+            single = await self._read_sheet_text(file_id)
+            return [single] if single else []
+
+        if len(names) > limit:
+            logger.info("%s has %d tabs, reading the first %d", file_id, len(names), limit)
+            names = names[:limit]
+
+        reports: list[str] = []
+        for name in names:
+            report = await self._read_sheet_text(file_id, tab=name)
+            if report:
+                reports.append(report)
+        return reports
 
     async def _fetch_file_bytes(self, file_id: str, type_hint: str | None) -> bytes | None:
         """Bytes for any Drive file: download binaries, export native editors."""
@@ -1547,11 +1591,12 @@ class GoogleWorkspaceConnector:
                     logger.info("could not read doc %s: %s", file_id, summarise_exception(exc))
 
             if not text and is_google_spreadsheet(type_hint):
-                report = await self._read_sheet_text(file_id)
-                if report:
-                    # Addressed the same way the answer model saw it, so a
-                    # reader checking a citation is looking at the same cells.
-                    text = sheets.render(report) or report
+                reports = await self._read_sheet_tabs(file_id)
+                if reports:
+                    # Every tab, addressed the same way the answer model saw
+                    # it, so a reader checking a citation is looking at the
+                    # same cells - and at the same sheets.
+                    text = sheets.render_tabs(reports) or reports[0]
 
             # PDF export has a size limit. Drive text export is the last resort.
             if not pages and not text:

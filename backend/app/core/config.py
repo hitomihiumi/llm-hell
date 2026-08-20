@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     # header band and the legend - are at the two ends of the sheet rather
     # than beside the row that matched. 1200 characters of a Gantt chart is
     # a page of `| | | X` with no dates attached to it.
-    answer_sheet_chars: int = 4000
+    answer_sheet_chars: int = 6000
     # Headroom left free inside ctx_window for the system prompt, the
     # question, and the chat template's own overhead.
     answer_ctx_reserve_tokens: int = 2048
@@ -184,6 +184,11 @@ class Settings(BaseSettings):
     # top hits get a second call to fetch their content. Each one is a round
     # trip, hence the small default; 0 disables enrichment entirely.
     google_enrich_hits: int = 3
+    # How many tabs of one workbook are read. A range read with no sheet name
+    # returns the FIRST tab and says nothing about the others, so a question
+    # about March was answered from the September tab of a two-semester Gantt
+    # chart. Each tab is a round trip, hence a bound rather than "all of them".
+    google_sheet_tabs: int = 5
 
 
 @lru_cache

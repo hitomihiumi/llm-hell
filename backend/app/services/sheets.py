@@ -40,6 +40,12 @@ _TAIL = re.compile(r"^-{3,}\s*$")
 # `## 'Fall Semester'!A1:AL1000` - which sheet and which range was read.
 _RANGE = re.compile(r"^##\s*(.+)$")
 
+# `- **Spring Semester** (sheetId: 298147837) - 1013 rows x 26 cols`, from the
+# `### Sheets (3)` block of a manage_sheets `get`. A workbook's tabs are the
+# one part of it a range read cannot reach: a read without a sheet name gets
+# the FIRST tab and nothing says the others exist.
+_TAB = re.compile(r"^-\s+\*\*(.+?)\*\*\s*\(sheetId:")
+
 # How many rows of the top of the sheet are kept when the whole thing will not
 # fit. The header band is the only place a column's meaning is written down,
 # and it is small - the sheet this was built against uses three rows, for the
@@ -50,6 +56,11 @@ HEADER_ROWS = 4
 # Legends live at the bottom ("X = Completed Tasks, O = Milestone Deadlines"),
 # and a mark whose meaning was cut is a mark that cannot be read.
 FOOTER_ROWS = 2
+
+# The least a tab may be given when several share one budget. Enough for the
+# range line, the header band and a couple of rows - a tab reduced to nothing
+# would be indistinguishable from a tab that does not exist.
+TAB_FLOOR_CHARS = 400
 
 _ELLIPSIS = "…"
 
@@ -159,3 +170,70 @@ def excerpt(report: str, query: str, limit: int) -> str:
         lines.append(rendered[position][1])
         previous = position
     return "\n".join(lines)
+
+
+def parse_tab_names(metadata: str) -> list[str]:
+    """The workbook's sheet names, from a manage_sheets `get` report.
+
+    Worth its own function because reading only the first tab is invisible:
+    the answer is confident, cites the file, and is about the wrong half of
+    the year. "Wisco Wingmen Gantt Chart" holds Fall Semester, Spring
+    Semester and a condensed view, and a question about March was answered
+    from the September tab.
+    """
+    return [
+        match.group(1).strip()
+        for match in (_TAB.match(line.strip()) for line in (metadata or "").splitlines())
+        if match
+    ]
+
+
+def a1_range(tab: str, columns: str = "A1:AZ1000") -> str:
+    """`'Spring Semester'!A1:AZ1000`, with the quoting A1 notation needs.
+
+    A name is always quoted rather than only when it has to be - a bare
+    `Sheet1!A1` works, but so does the quoted form, and deciding when a name
+    is safe to leave bare is a rule this does not need.
+    """
+    return "'{}'!{}".format(tab.replace("'", "''"), columns)
+
+
+def excerpt_tabs(reports: list[str], query: str, limit: int) -> str:
+    """Several tabs of one workbook, sharing `limit` between them.
+
+    Budget goes where the question points. Tabs are served in order of how
+    many rows in them match, so a question about March is not squeezed out by
+    the tab that happens to be first, and each tab keeps a floor so that a tab
+    which does not fit still contributes its header band rather than nothing.
+
+    Reassembled in the workbook's own order, because a reader comparing this
+    against the real spreadsheet should find the tabs where they live.
+    """
+    usable = [(index, report) for index, report in enumerate(reports) if report]
+    if not usable:
+        return ""
+    if len(usable) == 1:
+        return excerpt(usable[0][1], query, limit)
+
+    terms = [word for word in re.split(r"\W+", (query or "").lower()) if len(word) >= 3]
+
+    def matches(report: str) -> int:
+        lowered = report.lower()
+        return sum(1 for term in terms if term in lowered)
+
+    order = sorted(usable, key=lambda pair: (-matches(pair[1]), pair[0]))
+    pieces: dict[int, str] = {}
+    remaining = limit
+    for served, (index, report) in enumerate(order):
+        left = len(order) - served - 1
+        share = max(TAB_FLOOR_CHARS, remaining - TAB_FLOOR_CHARS * left)
+        piece = excerpt(report, query, share)
+        if piece:
+            pieces[index] = piece
+            remaining -= len(piece) + 1
+    return "\n\n".join(pieces[index] for index in sorted(pieces))
+
+
+def render_tabs(reports: list[str]) -> str:
+    """Every tab, whole, in the workbook's order."""
+    return "\n\n".join(piece for piece in (render(report) for report in reports) if piece)
