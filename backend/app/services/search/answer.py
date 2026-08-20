@@ -36,6 +36,13 @@ Rules:
 Cite more than one where more than one supports the claim: [1][3].
 - Use ONLY the numbers that appear below. Never invent a number.
 - Be concise. Lead with the answer, then the supporting detail.
+- Answer in the SAME language the question is written in.
+- Some results carry page images, labelled with the number that cites them. \
+Read those pages. A question about where something sits, what a diagram \
+connects, or what a label says is answered from the picture, not from the \
+text beside it.
+- Answer the question that was asked. If it asks where something is, give the \
+position; naming the part instead is not an answer.
 """
 
 #You answer questions using ONLY the numbered search results below, which come \

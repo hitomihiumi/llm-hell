@@ -69,3 +69,46 @@ def test_non_latin_words_survive():
 
     assert "auth-service" in terms
     assert any(term == "репозиторій" for term in terms)
+
+
+# --- what actually identifies a document ------------------------------------
+
+
+def test_identifiers_outrank_longer_prose():
+    """Ordering by length alone sent `relative` and dropped `MCU`. The search
+    worked by luck, because `board` happened to match the document."""
+    terms = search_terms("On the F722 board, which side is the USB port on relative to the MCU?")
+
+    assert terms[:3] == ["F722", "USB", "MCU"]
+    assert "relative" not in terms[:3]
+
+
+def test_a_question_in_another_language_keeps_its_identifiers():
+    """The interface speaks Ukrainian; the corpus is in English. Ranking by
+    length sent four Ukrainian words, none of which appears in an English
+    datasheet, so a question a person would actually type found nothing."""
+    terms = search_terms("З якого боку від MCU розташований USB-порт на платі F722?")
+
+    assert "F722" in terms
+    assert "MCU" in terms
+    assert "розташований" not in terms
+
+
+def test_a_mixed_script_token_also_offers_its_latin_run():
+    """`USB-порт` is a Ukrainian word wrapped around an English one, and only
+    the English half is in the document."""
+    assert "USB" in search_terms("USB-порт на платі")
+
+
+def test_camel_case_counts_as_an_identifier():
+    """A capital in the middle is not something a sentence produces."""
+    terms = search_terms("which file defines SearchHit exactly")
+
+    assert terms[0] == "SearchHit"
+
+
+def test_a_leading_capital_is_not_an_identifier():
+    """Otherwise the first word of every sentence outranks the real terms."""
+    terms = search_terms("Which board carries the STM32 chip")
+
+    assert terms[0] == "STM32"

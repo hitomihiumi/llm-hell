@@ -145,6 +145,28 @@ STOPWORDS = frozenset(
 DEFAULT_MAX_TERMS = 4
 
 
+# A token shaped like a name rather than like prose: it carries a digit, or
+# it is written in capitals, or it is joined with the punctuation identifiers
+# use. `F722`, `MCU`, `UART3`, `auth-service`, `SearchHit` - the words that
+# actually pick a document out of a corpus.
+_HAS_DIGIT = re.compile(r"\d")
+_JOINED = re.compile(r"[-_./]")
+# The Latin run inside a mixed-script token, so `USB-порт` also offers `USB`.
+_ASCII_RUN = re.compile(r"[A-Za-z][A-Za-z0-9]+")
+_NON_ASCII = re.compile(r"[^\x00-\x7f]")
+
+
+def _identifier_like(word: str) -> bool:
+    if _HAS_DIGIT.search(word) or _JOINED.search(word):
+        return True
+    # Capitals only count as a signal when the writer did not simply start a
+    # sentence: MCU and USB, not "Which". A capital in the MIDDLE is the
+    # camelCase giveaway - SearchHit, PdfReader - and no sentence produces it.
+    if len(word) >= 2 and word.isupper():
+        return True
+    return any(character.isupper() for character in word[1:])
+
+
 def search_terms(query: str, *, limit: int = DEFAULT_MAX_TERMS) -> list[str]:
     """The words in a question worth sending to a search backend.
 
@@ -155,16 +177,37 @@ def search_terms(query: str, *, limit: int = DEFAULT_MAX_TERMS) -> list[str]:
     In both cases the source looked empty when it was merely being asked a
     question no backend could match.
 
-    Ordered longest first, because the word that identifies a search is
-    rarely a short one, and capped because a long question is mostly filler
-    and every extra term costs either query length or a round-trip.
+    **Identifier-shaped tokens rank above prose, and length only breaks ties.**
+    Ordering by length alone was wrong in both languages this interface
+    speaks. Asking "which side is the USB port on relative to the MCU?" sent
+    `relative`, `board`, `F722`, `side` - `relative` is filler and `MCU` did
+    not survive the cap at all; the search worked by luck, because `board`
+    happened to match. The Ukrainian form of the same question was worse:
+    `розташований`, `USB-порт`, `якого`, `платі`, not one of which appears in
+    an English datasheet, so a question a person would actually type returned
+    nothing at all.
 
-    Original casing is preserved - some backends match case-sensitively on
-    identifiers - while the stopword test is case-insensitive.
+    A mixed-script token also offers its Latin run, because `USB-порт` is a
+    Ukrainian word wrapped around an English one and the corpus only has the
+    English half.
+
+    Capped because a long question is mostly filler and every extra term
+    costs either query length or a round-trip. Original casing is preserved -
+    some backends match case-sensitively on identifiers - while the stopword
+    test is case-insensitive.
     """
     words = re.findall(r"[\w'-]{2,}", query or "", re.UNICODE)
-    kept = [word for word in dict.fromkeys(words) if word.lower() not in STOPWORDS]
-    return sorted(kept, key=len, reverse=True)[:limit]
+
+    candidates: list[str] = []
+    for word in words:
+        candidates.append(word)
+        # Only when the token really is mixed: splitting an all-Latin word
+        # would just duplicate it.
+        if _NON_ASCII.search(word):
+            candidates.extend(_ASCII_RUN.findall(word))
+
+    kept = [word for word in dict.fromkeys(candidates) if word.lower() not in STOPWORDS]
+    return sorted(kept, key=lambda word: (not _identifier_like(word), -len(word)))[:limit]
 
 
 def _snap_forward(text: str, index: int) -> int:
