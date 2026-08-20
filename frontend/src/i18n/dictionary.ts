@@ -166,7 +166,7 @@ const en: Copy = {
     suggestions: [
       "On the F722 board, which side is the USB port on relative to the MCU?",
       "What is in the auth-service README?",
-      "Why is the recency boost deliberately tiny?",
+      "What are the dimensions of the u7 motor?",
     ],
     placeholder: "Ask a question…  (Enter to send, Shift+Enter for a new line)",
     allSources: "All sources",
@@ -289,7 +289,7 @@ const uk: Copy = {
     suggestions: [
       "З якого боку від MCU розташований USB-порт на платі F722?",
       "Що написано в README репозиторію auth-service?",
-      "Чому приріст за свіжістю навмисно крихітний?",
+      "Які розміри t motor u7?",
     ],
     placeholder:
       "Поставте питання…  (Enter — надіслати, Shift+Enter — новий рядок)",

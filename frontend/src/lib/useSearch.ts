@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { sanitizeAnswerText } from "@/lib/sanitizeAnswer";
 import { streamSearch } from "@/lib/sse";
 import type { ChatTurn, Citation, SearchHit, SourceStatus } from "@/lib/types";
 
@@ -102,10 +103,16 @@ export function useSearchRun() {
               });
               break;
             case "reasoning":
-              publish({ reasoning: current.reasoning + event.data.text });
+              publish({
+                reasoning: sanitizeAnswerText(
+                  current.reasoning + event.data.text,
+                ),
+              });
               break;
             case "token":
-              publish({ answer: current.answer + event.data.text });
+              publish({
+                answer: sanitizeAnswerText(current.answer + event.data.text),
+              });
               break;
             case "citations":
               publish({ citations: event.data.citations });

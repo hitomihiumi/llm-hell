@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.models.search_query import SearchQuery
@@ -74,31 +74,51 @@ def _select_connectors(
 
 
 async def _run_one(
-    source: Source, connector: Connector, query: str, *, limit: int, ctx: SearchContext, timeout: float
+    source: Source,
+    connector: Connector,
+    query: str,
+    *,
+    limit: int,
+    ctx: SearchContext,
+    timeout: float,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> SourceResult:
     """Belt and braces around a connector that already promises not to raise.
 
     The promise is part of the Connector contract, but a bug in one connector
     must not be able to take out the whole search, so the guarantee is
     enforced here as well as declared there.
+
+    Each connector search gets its own database session.  Connectors do their
+    own I/O and may time out or raise; sharing the request session meant a
+    cancelled source query could leave the request transaction in a failed
+    state and break the commit that persists the search record.
     """
     started = time.monotonic()
-    try:
-        return await asyncio.wait_for(connector.search(query, limit=limit, ctx=ctx), timeout=timeout)
-    except TimeoutError:
-        return SourceResult(
-            source_key=source.key,
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-            error=f"timed out after {timeout:.0f}s",
+    async with session_factory() as db:
+        connector_ctx = SearchContext(
+            db=db,
+            user=ctx.user,
+            http_client=ctx.http_client,
+            answer_endpoint=ctx.answer_endpoint,
+            vision_endpoint=ctx.vision_endpoint,
+            debug=ctx.debug,
         )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("connector %r raised, which it should not", source.key)
-        return SourceResult(
-            source_key=source.key,
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-            error=summarise_exception(exc),
-        )
-
+        try:
+            return await asyncio.wait_for(connector.search(query, limit=limit, ctx=connector_ctx), timeout=timeout)
+        except TimeoutError:
+            return SourceResult(
+                source_key=source.key,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+                error=f"timed out after {timeout:.0f}s",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("connector %r raised, which it should not", source.key)
+            return SourceResult(
+                source_key=source.key,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+                error=summarise_exception(exc),
+            )
 
 
 def _merge_attempts(attempts: list[SourceResult]) -> SourceResult:
@@ -166,6 +186,12 @@ async def federated_search(
     per_source_limit = settings.search_per_source_limit
     total_limit = limit or settings.search_total_limit
 
+    # Every connector search gets its own session so that a timed-out or
+    # failed source cannot poison the request transaction.  The factory is
+    # bound to the same engine as the caller's session, so tests that swap
+    # the engine still see the same in-memory/test database.
+    session_factory = async_sessionmaker(db.bind, expire_on_commit=False, class_=AsyncSession)
+
     # Every planned phrasing against every source, all at once. Concurrent
     # rather than sequential because the queries are independent: three
     # phrasings cost the latency of the slowest one, not the sum of three.
@@ -182,6 +208,7 @@ async def federated_search(
                         limit=per_source_limit,
                         ctx=ctx,
                         timeout=settings.search_timeout_seconds,
+                        session_factory=session_factory,
                     )
                     for source, connector in pairs
                 )
@@ -192,8 +219,7 @@ async def federated_search(
         gathered.append(list(attempt))
 
     results: list[SourceResult] = [
-        _merge_attempts([attempt[index] for attempt in gathered])
-        for index in range(len(pairs))
+        _merge_attempts([attempt[index] for attempt in gathered]) for index in range(len(pairs))
     ]
 
     by_source = {result.source_key: result for result in results}

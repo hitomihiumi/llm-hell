@@ -4,6 +4,7 @@ from app.core.config import Settings
 from app.models.endpoint import ModelEndpoint
 from app.schemas.search import SearchHit
 from app.services.search.answer import (
+    _sanitize_answer_text,
     build_prompt,
     extract_citations,
     render_hit,
@@ -200,3 +201,13 @@ async def test_synthesize_against_the_mock_endpoint(mock_vllm_http_client):
     assert result.model == "glm-4.7"
     assert result.hits_used == 3
     assert isinstance(result.text, str)
+
+
+def test_latex_symbols_are_sanitized_to_unicode():
+    raw = "Diameter is $\\varnothing 60,7$ mm, torque is $\\pm 0.5$ Nm, angle is $30^\\circ$."
+    assert _sanitize_answer_text(raw) == "Diameter is ⌀ 60,7 mm, torque is ± 0.5 Nm, angle is 30°."
+
+
+def test_unknown_latex_commands_are_left_in_place():
+    """We only rewrite symbols we recognise; anything else stays readable."""
+    assert _sanitize_answer_text("Value is $\\foo 42$") == "Value is \\foo 42"

@@ -76,6 +76,18 @@ README_CHARS = 4000
 MAX_CONTENT_CHARS = 200_000
 
 
+def _unreachable(exc: Exception) -> bool:
+    """Whether this failure is the whole instance rather than one query.
+
+    GitLab answers a bad search with a status code; an instance that is not
+    running produces a transport error with no response at all, which is what
+    `request to ... failed, reason:` is - node's fetch, reporting a refused
+    connection.
+    """
+    text = str(exc).lower()
+    return "failed, reason" in text or "econnrefused" in text or "getaddrinfo" in text
+
+
 class GitLabConnector:
     kind = "gitlab"
 
@@ -220,6 +232,13 @@ class GitLabConnector:
                 )
             except McpError as exc:
                 errors.append(f"search_repositories({term}): {exc}")
+                # A term that found nothing is worth moving past; a host that
+                # is not there is not. When GitLab itself is down every term
+                # fails identically, and trying the rest turns one clear
+                # failure into three copies of it and three more round-trips
+                # against a dead address.
+                if _unreachable(exc):
+                    break
                 continue
             for project in self._items(raw.payload(source=self.key, tool="search_repositories")):
                 # Terms overlap - "auth" and "service" both return

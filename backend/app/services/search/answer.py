@@ -28,6 +28,64 @@ logger = logging.getLogger("llmhell.answer")
 
 _CITATION = re.compile(r"\[(\d{1,3})\]")
 
+# The model sometimes writes LaTeX math ($\varnothing$, $\times$, etc.) even
+# when told not to. Map the common commands to Unicode and unwrap inline math
+# so stored answers and history do not expose raw markup.
+_LATEX_REPLACEMENTS: dict[str, str] = {
+    "varnothing": "⌀",
+    "emptyset": "∅",
+    "approx": "≈",
+    "sim": "∼",
+    "times": "×",
+    "cdot": "·",
+    "pm": "±",
+    "mp": "∓",
+    "leq": "≤",
+    "le": "≤",
+    "geq": "≥",
+    "ge": "≥",
+    "neq": "≠",
+    "ne": "≠",
+    "degree": "°",
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "delta": "δ",
+    "mu": "µ",
+    "Omega": "Ω",
+    "omega": "ω",
+    "Sigma": "Σ",
+    "sigma": "σ",
+    "theta": "θ",
+    "phi": "φ",
+    "Phi": "Φ",
+    "pi": "π",
+    "infty": "∞",
+    "infinity": "∞",
+    "ldots": "…",
+    "dots": "…",
+}
+
+
+def _sanitize_answer_text(text: str) -> str:
+    """Clean LaTeX markup the model occasionally emits."""
+    # Inline and block math delimiters: keep the body.
+    text = re.sub(r"\$\$([^$]*?)\$\$", r"\1", text)
+    text = re.sub(r"\$([^$]*?)\$", r"\1", text)
+    # \text{foo} -> foo
+    text = re.sub(r"\\text\{([^}]*)\}", r"\1", text)
+    # Superscript degree.
+    text = re.sub(r"\^\{\\circ\}", "°", text)
+    text = re.sub(r"\^\\circ", "°", text)
+    # Known commands; leave unknown ones untouched.
+    text = re.sub(
+        r"\\([a-zA-Z]+)",
+        lambda match: _LATEX_REPLACEMENTS.get(match.group(1), match.group(0)),
+        text,
+    )
+    return text
+
+
 SYSTEM_PROMPT = """\
 
 
@@ -43,14 +101,18 @@ connects, or what a label says is answered from the picture, not from the \
 text beside it.
 - Answer the question that was asked. If it asks where something is, give the \
 position; naming the part instead is not an answer.
+- Write measurements in plain text, not LaTeX. Use Unicode symbols directly: \
+⌀ for diameter, × for multiplication, ° for degrees, ± for plus-minus. \
+Never wrap values in $...$ or use \\varnothing, \\times, \\degree, etc.
 """
 
-#You answer questions using ONLY the numbered search results below, which come \
-#from the user's Google Workspace, GitLab and internal knowledge base.
+# You answer questions using ONLY the numbered search results below, which come \
+# from the user's Google Workspace, GitLab and internal knowledge base.
 
 # - If the results do not answer the question, say so plainly. Do not fill the gap \
 # from your own knowledge - a wrong answer that looks sourced is worse than "I \
 # don't know".
+
 
 @dataclass
 class AnswerResult:
@@ -199,9 +261,7 @@ def build_prompt(
         for offset, page in enumerate(images.get(hit.id, []), start=1):
             encoded = base64.b64encode(page).decode("ascii")
             attachments.append({"type": "text", "text": f"[{position}] page image {offset}:"})
-            attachments.append(
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
-            )
+            attachments.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}})
 
     # A plain string when there is nothing to attach: a text-only server
     # should not be handed the multimodal list form for a question that never
@@ -238,9 +298,7 @@ def extract_citations(text: str, hits: list[SearchHit]) -> tuple[list[Citation],
             continue
         seen.add(n)
         hit = hits[n - 1]
-        citations.append(
-            Citation(n=n, hit_id=hit.id, title=hit.title, url=hit.url, source=hit.source)
-        )
+        citations.append(Citation(n=n, hit_id=hit.id, title=hit.title, url=hit.url, source=hit.source))
 
     citations.sort(key=lambda citation: citation.n)
     return citations, hallucinated
@@ -272,9 +330,10 @@ async def synthesize(
     except chat.ChatError as exc:
         return AnswerResult(model=endpoint.model_id, error=str(exc))
 
-    citations, hallucinated = extract_citations(completion.content, included)
+    text = _sanitize_answer_text(completion.content)
+    citations, hallucinated = extract_citations(text, included)
     return AnswerResult(
-        text=completion.content,
+        text=text,
         reasoning=completion.reasoning,
         model=endpoint.model_id,
         citations=citations,
@@ -347,16 +406,19 @@ async def synthesize_stream(
         text_parts.append(tail.content_text)
         yield "token", {"text": tail.content_text}
 
-    text = "".join(text_parts)
+    text = _sanitize_answer_text("".join(text_parts))
     citations, hallucinated = extract_citations(text, included)
-    yield "done", AnswerResult(
-        text=text,
-        reasoning="".join(reasoning_parts),
-        model=endpoint.model_id,
-        citations=citations,
-        hits_used=len(included),
-        hits_dropped=len(hits) - len(included),
-        hallucinated_citations=hallucinated,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
+    yield (
+        "done",
+        AnswerResult(
+            text=text,
+            reasoning="".join(reasoning_parts),
+            model=endpoint.model_id,
+            citations=citations,
+            hits_used=len(included),
+            hits_dropped=len(hits) - len(included),
+            hallucinated_citations=hallucinated,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        ),
     )

@@ -46,6 +46,7 @@ response matches no known shape at all `search()` reports that in
 """
 
 import asyncio
+import io
 import logging
 import re
 import time
@@ -90,6 +91,13 @@ MAX_RESULTS = 50
 MAX_CONTENT_CHARS = 200_000
 
 # Which fat tool serves which source, and what a hit from it is.
+# Image files downloaded for the answer model are converted to JPEG and
+# downscaled if they exceed this, so a huge photo does not break the request.
+_IMAGE_MAX_DIMENSION = 2048
+# Google Drive refuses to export files whose rendered output would exceed
+# roughly 10 MB.  Treat source files above 8 MB as too risky to export.
+_MAX_DRIVE_EXPORT_BYTES = 8 * 1024 * 1024
+
 _SURFACES: dict[str, dict[str, Any]] = {
     SOURCE_GOOGLE_DRIVE: {"tool": "manage_drive", "kind": "document"},
     SOURCE_GOOGLE_MAIL: {"tool": "manage_email", "kind": "email"},
@@ -223,6 +231,23 @@ _DRIVE_URL_DEFAULT = "https://drive.google.com/file/d/{id}/view"
 # own formats are "g/document", "g/spreadsheet"; everything else is a plain
 # extension, so a PDF reads simply "pdf".
 _PDF_TYPE_HINTS = frozenset(["pdf", "application/pdf"])
+_IMAGE_TYPE_HINTS = frozenset(
+    [
+        "image",
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp",
+        "bmp",
+    ]
+)
 
 # `download` answers with a report, not the bytes:
 #
@@ -238,7 +263,96 @@ def is_pdf(type_hint: str | None) -> bool:
     return (type_hint or "").strip().lower() in _PDF_TYPE_HINTS
 
 
+def is_image(type_hint: str | None) -> bool:
+    normalised = (type_hint or "").strip().lower()
+    return normalised in _IMAGE_TYPE_HINTS or normalised.startswith("image/")
+
+
+# Drive abbreviates Google's own formats as "g/document", "g/spreadsheet" in
+# search reports; manage_drive get may return the full MIME type.
+_GOOGLE_WORKSPACE_EDITOR_TYPES = frozenset(
+    [
+        "g/document",
+        "g/spreadsheet",
+        "g/presentation",
+        "g/drawing",
+        "g/form",
+        "application/vnd.google-apps.document",
+        "application/vnd.google-apps.spreadsheet",
+        "application/vnd.google-apps.presentation",
+        "application/vnd.google-apps.drawing",
+        "application/vnd.google-apps.form",
+    ]
+)
+
+
+def is_google_workspace_editor(type_hint: str | None) -> bool:
+    return (type_hint or "").strip().lower() in _GOOGLE_WORKSPACE_EDITOR_TYPES
+
+
+def is_google_doc(type_hint: str | None) -> bool:
+    normalised = (type_hint or "").strip().lower()
+    return normalised in ("g/document", "application/vnd.google-apps.document")
+
+
+def is_google_spreadsheet(type_hint: str | None) -> bool:
+    normalised = (type_hint or "").strip().lower()
+    return normalised in ("g/spreadsheet", "application/vnd.google-apps.spreadsheet")
+
+
+def _workspace_text_mime_type(type_hint: str | None) -> str | None:
+    """A lightweight text export for files too large to export as PDF."""
+    normalised = (type_hint or "").strip().lower()
+    if normalised in ("g/spreadsheet", "application/vnd.google-apps.spreadsheet"):
+        return "text/csv"
+    if normalised in ("g/document", "application/vnd.google-apps.document"):
+        return "text/plain"
+    return None
+
+
+def is_previewable_drive_file(type_hint: str | None) -> bool:
+    # Spreadsheets are read through the Sheets API; PDF export of a large
+    # sheet reliably hits exportSizeLimitExceeded and gives no useful preview.
+    return (
+        is_pdf(type_hint)
+        or is_image(type_hint)
+        or (is_google_workspace_editor(type_hint) and not is_google_spreadsheet(type_hint))
+    )
+
+
+def _image_as_jpeg(data: bytes, quality: int = 85) -> bytes | None:
+    """Convert any raster image to a JPEG the answer model can consume."""
+    try:
+        from PIL import Image
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PIL is not available, cannot convert image: %s", exc)
+        return None
+
+    try:
+        image = Image.open(io.BytesIO(data))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("could not open image: %s", exc)
+        return None
+
+    try:
+        if image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
+        max_dim = max(image.width, image.height)
+        if max_dim > _IMAGE_MAX_DIMENSION:
+            ratio = _IMAGE_MAX_DIMENSION / max_dim
+            size = (int(image.width * ratio), int(image.height * ratio))
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            image = image.resize(size, resample)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=quality)
+        return buffer.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("could not convert image to JPEG: %s", exc)
+        return None
+
+
 _DRIVE_TYPE = re.compile(r"^\*\*Type:\*\*\s*(\S+)\s*$", re.MULTILINE)
+_SIZE = re.compile(r"^\*\*Size:\*\*\s*([\d.]+)\s*(B|KB|MB|GB|TB)\s*$", re.MULTILINE)
 
 
 def parse_drive_type(text: str) -> str | None:
@@ -254,6 +368,34 @@ def parse_drive_type(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def parse_drive_size(text: str) -> int | None:
+    """Bytes from a `manage_drive get` size line like `**Size:** 2.2 KB`."""
+    match = _SIZE.search(text or "")
+    if not match:
+        return None
+    try:
+        value = float(match.group(1))
+    except ValueError:
+        return None
+    unit = match.group(2).upper()
+    multipliers = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+    return int(value * multipliers.get(unit, 1))
+
+
+def _parse_size_value(value: str) -> int | None:
+    """Bytes from a raw size string like `2.2 MB` or `15 GB`."""
+    match = re.search(r"([\d.]+)\s*(B|KB|MB|GB|TB)", (value or "").strip(), re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        number = float(match.group(1))
+    except ValueError:
+        return None
+    unit = match.group(2).upper()
+    multipliers = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+    return int(number * multipliers.get(unit, 1))
+
+
 def drive_type_hints(text: str) -> dict[str, str]:
     """file id -> the report's abbreviated type, for the rows in a search.
 
@@ -267,6 +409,17 @@ def drive_type_hints(text: str) -> dict[str, str]:
         if len(row) > 2 and row[0]:
             hints[row[0]] = row[2]
     return hints
+
+
+def drive_size_hints(text: str) -> dict[str, int]:
+    """file id -> size in bytes, parsed from the search report's size column."""
+    sizes: dict[str, int] = {}
+    for row in parse_markdown_rows(text):
+        if len(row) > 4 and row[0]:
+            size = _parse_size_value(row[4])
+            if size is not None:
+                sizes[row[0]] = size
+    return sizes
 
 
 def parse_download_path(text: str) -> str | None:
@@ -340,7 +493,7 @@ def parse_markdown_rows(text: str) -> list[list[str]]:
 
 
 def parse_short_date(value: str) -> datetime | None:
-    """"Aug 17" or "Aug 17, 2024" to a datetime, or None.
+    """ "Aug 17" or "Aug 17, 2024" to a datetime, or None.
 
     The server omits the year for recent items, the way a mail client does,
     which means it is implicitly "the most recent Aug 17 that has already
@@ -397,6 +550,11 @@ def drive_hits_from_markdown(text: str, *, source_key: str, debug: bool) -> list
                 url=drive_url(file_id, type_hint),
                 timestamp=parse_short_date(row[3]) if len(row) > 3 else None,
                 rank_in_source=len(hits),
+                # Any previewable Drive file advertises a thumbnail so the
+                # result card can show it. The viewer fetches the real image
+                # from /api/preview on demand; if export/download fails the
+                # broken preview is dropped on the client.
+                preview_pages=1 if is_previewable_drive_file(type_hint) else None,
                 raw={"row": row} if debug else None,
             )
         )
@@ -517,9 +675,7 @@ def drive_hit(item: dict[str, Any], rank: int, *, source_key: str, debug: bool) 
     if isinstance(owners, list) and owners:
         first_owner = owners[0]
         author = (
-            _first(first_owner, "displayName", "emailAddress")
-            if isinstance(first_owner, dict)
-            else str(first_owner)
+            _first(first_owner, "displayName", "emailAddress") if isinstance(first_owner, dict) else str(first_owner)
         )
     author = author or _first(item, "lastModifyingUser", "owner", "author")
     if isinstance(author, dict):
@@ -531,12 +687,9 @@ def drive_hit(item: dict[str, Any], rank: int, *, source_key: str, debug: bool) 
         kind="document",
         external_id=str(file_id) if file_id else None,
         title=str(title),
-        snippet=truncate(
-            str(_first(item, "snippet", "description", "summary", "mimeType") or ""), SNIPPET_CHARS
-        ),
+        snippet=truncate(str(_first(item, "snippet", "description", "summary", "mimeType") or ""), SNIPPET_CHARS),
         url=str(url) if url else None,
-        author=str(author) if author else None
-        ,
+        author=str(author) if author else None,
         timestamp=parse_timestamp(_first(item, "modifiedTime", "modifiedDate", "updated", "createdTime")),
         rank_in_source=rank,
         raw=item if debug else None,
@@ -579,9 +732,7 @@ def email_hit(item: dict[str, Any], rank: int, *, source_key: str, debug: bool) 
         snippet=truncate(str(_first(item, "snippet", "preview", "bodyPreview", "body") or ""), SNIPPET_CHARS),
         url=str(url) if url else None,
         author=str(sender) if sender else None,
-        timestamp=parse_timestamp(
-            _first(item, "date", "internalDate", "receivedTime") or headers.get("date")
-        ),
+        timestamp=parse_timestamp(_first(item, "date", "internalDate", "receivedTime") or headers.get("date")),
         rank_in_source=rank,
         raw=item if debug else None,
     )
@@ -603,6 +754,9 @@ class GoogleWorkspaceConnector:
         # in `_to_hits` and read by enrichment, which has to know whether a
         # hit is a Google Doc or a PDF and has nothing on the hit to tell it.
         self._type_hints: dict[str, str] = {}
+        # file id -> size in bytes, parsed from manage_drive get. Used to skip
+        # PDF export for files that are clearly too large for Drive's limit.
+        self._file_sizes: dict[str, int] = {}
         # file id -> name, remembered from the search report so a page stored
         # in the index can be shown with the document's real title rather than
         # its id.
@@ -623,9 +777,7 @@ class GoogleWorkspaceConnector:
         # to fall back to, so a missing account is a configuration error
         # raised before the call rather than a schema rejection after it.
         if not self._account:
-            raise McpError(
-                "GOOGLE_ACCOUNT_EMAIL is not set, and the Google tools require an account address"
-            )
+            raise McpError("GOOGLE_ACCOUNT_EMAIL is not set, and the Google tools require an account address")
         return {"email": self._account}
 
     async def _call(self, tool: str, arguments: dict[str, Any]) -> RawToolResult:
@@ -729,9 +881,7 @@ class GoogleWorkspaceConnector:
         enriched = 0
         if hits and self._settings.google_enrich_hits > 0:
             try:
-                enriched = await self._enrich(
-                    hits[: self._settings.google_enrich_hits], query=query, ctx=ctx
-                )
+                enriched = await self._enrich(hits[: self._settings.google_enrich_hits], query=query, ctx=ctx)
             except Exception as exc:  # noqa: BLE001 - snippets are a bonus, hits are the result
                 logger.warning("%s enrichment failed: %s", self.key, summarise_exception(exc))
                 result.degraded = True
@@ -744,9 +894,7 @@ class GoogleWorkspaceConnector:
         from_index = 0
         if is_drive:
             try:
-                from_index = await self._add_index_hits(
-                    hits, query=query, limit=limit, ctx=ctx, debug=ctx.debug
-                )
+                from_index = await self._add_index_hits(hits, query=query, limit=limit, ctx=ctx, debug=ctx.debug)
             except Exception as exc:  # noqa: BLE001 - a local index is an addition, never the result
                 logger.warning("page index lookup failed: %s", summarise_exception(exc))
 
@@ -803,9 +951,8 @@ class GoogleWorkspaceConnector:
                 # enrichment has to tell a Google Doc from a PDF and the hit
                 # itself carries nothing that does.
                 self._type_hints.update(drive_type_hints(raw.text))
-                self._titles.update(
-                    {hit.external_id: hit.title for hit in hits if hit.external_id}
-                )
+                self._file_sizes.update(drive_size_hints(raw.text))
+                self._titles.update({hit.external_id: hit.title for hit in hits if hit.external_id})
             return hits, "markdown"
 
         # A genuinely empty result reads "No messages found for query: …",
@@ -842,8 +989,9 @@ class GoogleWorkspaceConnector:
             # ("Export only supports Docs Editors files") and refuses to render
             # it ("not a viewable image type"), so the only way to its content
             # is to download the file and parse it here.
-            if is_pdf(self._type_hints.get(hit.external_id)):
-                text = await self._read_pdf(hit.external_id, ctx=ctx, transcribe=False)
+            type_hint = self._type_hints.get(hit.external_id)
+            if is_pdf(type_hint):
+                text = await self._read_pdf(hit.external_id, type_hint=type_hint, ctx=ctx, transcribe=False)
                 self._schedule_transcription(hit.external_id, ctx=ctx)
                 # How many pictures the UI may ask for. Counted here because
                 # the file is already open; the alternative is the browser
@@ -856,9 +1004,60 @@ class GoogleWorkspaceConnector:
                     # sentences long, and 400 characters cuts it mid-pinout -
                     # while the answer prompt has room for 1200 per hit and
                     # was simply not being given it.
-                    hit.snippet = excerpt_around(
-                        text, query, self._settings.answer_snippet_chars
-                    )
+                    hit.snippet = excerpt_around(text, query, self._settings.answer_snippet_chars)
+                    enriched += 1
+                continue
+
+            if is_image(self._type_hints.get(hit.external_id)):
+                # A standalone image has no text body, but the picture itself
+                # is the preview. Counting it here lets the result card show
+                # a thumbnail and the viewer open it without a 404.
+                try:
+                    pages = await self.page_images(hit.id)
+                    hit.preview_pages = len(pages) or None
+                except Exception as exc:  # noqa: BLE001 - a preview is a bonus
+                    logger.info("could not preview image %s: %s", hit.external_id, summarise_exception(exc))
+                continue
+
+            type_hint = self._type_hints.get(hit.external_id)
+            if is_google_workspace_editor(type_hint):
+                # Native Google files (Docs, Sheets, Slides, Drawings) cannot be
+                # downloaded; export to PDF and render pages for the preview.
+                # Google Docs also get their text body through manage_docs.
+                try:
+                    pages = await self.page_images(hit.id)
+                    hit.preview_pages = len(pages) or None
+                except Exception as exc:  # noqa: BLE001 - a preview is a bonus
+                    logger.info("could not preview workspace file %s: %s", hit.external_id, summarise_exception(exc))
+
+                body: str | None = None
+                if is_google_doc(type_hint):
+                    try:
+                        raw = await self._call(
+                            "manage_docs",
+                            {"email": self._account, "operation": "get", "documentId": hit.external_id},
+                        )
+                        body = extract_report_body(raw.text)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info("could not read doc %s: %s", hit.external_id, summarise_exception(exc))
+
+                if body is None and is_google_spreadsheet(type_hint):
+                    # Sheets API reads values directly; this bypasses the Drive
+                    # export size limit that breaks PDF/CSV export of huge sheets.
+                    body = await self._read_sheet_text(hit.external_id)
+
+                # PDF export has a size limit (especially for huge Sheets).
+                # A lightweight Drive text export is the last resort.
+                if body is None and not pages:
+                    try:
+                        exported = await self._export_workspace_text(hit.external_id, type_hint)
+                        if exported:
+                            body = exported.decode("utf-8", errors="ignore")
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info("could not export text for %s: %s", hit.external_id, summarise_exception(exc))
+
+                if body:
+                    hit.snippet = excerpt_around(body, query, self._settings.answer_snippet_chars)
                     enriched += 1
                 continue
 
@@ -894,9 +1093,7 @@ class GoogleWorkspaceConnector:
         A document Drive already returned is skipped. It is the same file, and
         two cards for it would look like two documents.
         """
-        matched = await page_index.search_pages(
-            ctx.db, query, source_key=self.key, limit=limit
-        )
+        matched = await page_index.search_pages(ctx.db, query, source_key=self.key, limit=limit)
         if not matched:
             return 0
 
@@ -930,41 +1127,44 @@ class GoogleWorkspaceConnector:
         return added
 
     async def page_images(self, hit_id: str, *, max_pages: int | None = None) -> list[bytes]:
-        """The pages of a PDF hit, rendered, for the answer model to look at.
+        """Pictures for the answer model to look at.
 
-        This is the single-pass path: rather than having one model describe a
-        page and another answer from the description, the page itself goes
-        into the answer prompt. Nothing is transcribed, nothing is stored, and
-        nothing can be lost in between - the model sees what the reader would
-        see.
-
-        Rendering is local and the file is already on the shared mount, so the
-        cost is a read and a few hundred milliseconds, not a model call.
-        Returns [] for anything that is not a PDF, which is most hits.
+        For PDFs and exported Google Workspace files this renders the most
+        visual pages. For raster images it downloads and converts the file
+        itself, so the model sees the picture rather than just its filename.
         """
         prefix, _, file_id = hit_id.partition(":")
         if prefix != self.key or not file_id:
             return []
-        if not is_pdf(await self._type_of(file_id)):
+
+        type_hint = await self._type_of(file_id)
+        # Spreadsheets are read through the Sheets API instead; exporting a
+        # large sheet to PDF hits Drive's exportSizeLimitExceeded and produces
+        # noisy logs without giving the model usable content.
+        if is_google_spreadsheet(type_hint):
             return []
 
-        data = await self._read_pdf_bytes(file_id)
+        data = await self._fetch_file_bytes(file_id, type_hint)
         if data is None:
             return []
 
-        wanted = select_visual_pages(
-            page_stats(data), max_pages=max_pages or self._settings.vision_max_pages
-        )
-        if not wanted:
-            return []
+        if is_pdf(type_hint) or is_google_workspace_editor(type_hint):
+            wanted = select_visual_pages(page_stats(data), max_pages=max_pages or self._settings.vision_max_pages)
+            if not wanted:
+                return []
+            rendered = render_pages(
+                data,
+                wanted,
+                scale=self._settings.vision_scale,
+                quality=self._settings.vision_jpeg_quality,
+            )
+            return [rendered[index] for index in sorted(rendered)]
 
-        rendered = render_pages(
-            data,
-            wanted,
-            scale=self._settings.vision_scale,
-            quality=self._settings.vision_jpeg_quality,
-        )
-        return [rendered[index] for index in sorted(rendered)]
+        if is_image(type_hint):
+            jpeg = _image_as_jpeg(data, quality=self._settings.vision_jpeg_quality)
+            return [jpeg] if jpeg else []
+
+        return []
 
     async def _type_of(self, file_id: str) -> str | None:
         """The file's type, from the last search if it is still remembered and
@@ -974,9 +1174,7 @@ class GoogleWorkspaceConnector:
             return cached
 
         try:
-            raw = await self._call(
-                "manage_drive", {"email": self._account, "operation": "get", "fileId": file_id}
-            )
+            raw = await self._call("manage_drive", {"email": self._account, "operation": "get", "fileId": file_id})
         except Exception as exc:  # noqa: BLE001 - unknown type, handled by the caller
             logger.info("could not read metadata for %s: %s", file_id, summarise_exception(exc))
             return None
@@ -984,17 +1182,32 @@ class GoogleWorkspaceConnector:
         found = parse_drive_type(raw.text)
         if found:
             self._type_hints[file_id] = found
+        size = parse_drive_size(raw.text)
+        if size is not None:
+            self._file_sizes[file_id] = size
         return found
 
-    async def _read_pdf_bytes(self, file_id: str) -> bytes | None:
-        """Download a PDF through the server and return its text layer.
+    def _should_attempt_pdf_export(self, file_id: str) -> bool:
+        """Skip PDF export when the source file is clearly too large.
+
+        Drive's export limit is roughly 10 MB of rendered output; a source
+        file above 8 MB is very likely to exceed it and will only produce a
+        noisy error.  When size is unknown we still try.
+        """
+        size = self._file_sizes.get(file_id)
+        if size is None:
+            return True
+        return size <= _MAX_DRIVE_EXPORT_BYTES
+
+    async def _download_file(self, file_id: str) -> bytes | None:
+        """Download a Drive file through the server and return its bytes.
 
         The bytes never cross the MCP boundary: `download` saves the file into
         the server's own workspace and reports the path, and that directory is
         bind-mounted here read-only at the same path.
 
-        The path therefore comes from the server's own output, which is why it
-        is resolved and confined to the share directory before anything is
+        The path therefore comes from the server itself, which is why it is
+        resolved and confined to the share directory before anything is
         opened. The same mount holds the OAuth tokens, and a server that could
         name any path could name those.
         """
@@ -1031,6 +1244,89 @@ class GoogleWorkspaceConnector:
             logger.warning("could not read %s: %s", path, exc)
             return None
 
+    async def _export_file(self, file_id: str, mime_type: str) -> bytes | None:
+        """Export a Google Workspace editor file to a chosen MIME type.
+
+        manage_drive download only works for binary files; native Google files
+        must be exported. The server writes the result to the share directory
+        and reports the path, just like download.
+        """
+        from pathlib import Path
+
+        try:
+            raw = await self._call(
+                "manage_drive",
+                {
+                    "email": self._account,
+                    "operation": "export",
+                    "fileId": file_id,
+                    "mimeType": mime_type,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - an export failure is not fatal
+            logger.info("could not export %s as %s: %s", file_id, mime_type, summarise_exception(exc))
+            return None
+
+        reported = parse_download_path(raw.text)
+        if not reported:
+            logger.info("export of %s reported no path", file_id)
+            return None
+
+        share = Path(self._settings.google_share_dir).resolve()
+        try:
+            path = Path(reported).resolve()
+            path.relative_to(share)
+        except (ValueError, OSError):
+            logger.warning("refusing an export path outside %s: %r", share, reported)
+            return None
+
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            logger.warning("could not read exported file %s: %s", path, exc)
+            return None
+
+    async def _export_file_as_pdf(self, file_id: str) -> bytes | None:
+        if not self._should_attempt_pdf_export(file_id):
+            logger.debug("skipping PDF export for %s: file is larger than %s bytes", file_id, _MAX_DRIVE_EXPORT_BYTES)
+            return None
+        return await self._export_file(file_id, "application/pdf")
+
+    async def _export_workspace_text(self, file_id: str, type_hint: str | None) -> bytes | None:
+        """CSV for Sheets, plain text for Docs — when PDF is too large."""
+        mime_type = _workspace_text_mime_type(type_hint)
+        if mime_type is None:
+            return None
+        return await self._export_file(file_id, mime_type)
+
+    async def _read_sheet_text(self, file_id: str) -> str | None:
+        """Read a bounded range from a Google Sheet via manage_sheets.
+
+        This avoids the Drive export size limit.  A1:Z1000 covers the first
+        thousand rows and 26 columns; that is enough for typical planning
+        spreadsheets while staying within the Sheets API read limit.
+        """
+        try:
+            raw = await self._call(
+                "manage_sheets",
+                {
+                    "email": self._account,
+                    "operation": "read",
+                    "spreadsheetId": file_id,
+                    "range": "A1:AZ1000",
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - a sheet that will not read is not fatal
+            logger.info("could not read sheet %s: %s", file_id, summarise_exception(exc))
+            return None
+        return raw.text
+
+    async def _fetch_file_bytes(self, file_id: str, type_hint: str | None) -> bytes | None:
+        """Bytes for any Drive file: download binaries, export native editors."""
+        if is_google_workspace_editor(type_hint):
+            return await self._export_file_as_pdf(file_id)
+        return await self._download_file(file_id)
+
     def _schedule_transcription(self, file_id: str, *, ctx: SearchContext) -> None:
         """Read the document's pages after the response has gone out.
 
@@ -1060,7 +1356,10 @@ class GoogleWorkspaceConnector:
             from app.core.db import SessionLocal
 
             try:
-                async with httpx.AsyncClient(timeout=self._settings.vision_timeout_seconds) as client, SessionLocal() as db:
+                async with (
+                    httpx.AsyncClient(timeout=self._settings.vision_timeout_seconds) as client,
+                    SessionLocal() as db,
+                ):
                     background = SearchContext(
                         db=db,
                         user=ctx.user,
@@ -1081,26 +1380,22 @@ class GoogleWorkspaceConnector:
         task.add_done_callback(self._tasks.discard)
 
     async def _read_pdf(
-        self, file_id: str, *, ctx: SearchContext | None = None, transcribe: bool = True
+        self,
+        file_id: str,
+        *,
+        type_hint: str | None = None,
+        ctx: SearchContext | None = None,
+        transcribe: bool = True,
     ) -> str:
         """A PDF as text: its text layer, plus its pages read by a vision
         model when one is configured.
 
-        The two are not alternatives. The text layer is exact and comes first;
-        the page transcriptions are appended and labelled, because what is
-        only in a diagram - a pin name, a wiring order, a value on a chart -
-        is precisely what the text layer cannot hold. The datasheet this was
-        built against extracts 6k characters of specifications and still says
-        nothing about which pad is UART3 TX.
-
-        Transcriptions are stored in `document_pages` rather than held in
-        memory. They do not depend on the question, so re-describing a page
-        for every search would be paying a GPU to produce a string we already
-        have - and a process-local cache loses that on every deploy. Stored,
-        they are also searchable, which is what makes a diagram findable at
-        all: see `services/search/page_index.py`.
+        Google Workspace editor files are exported to PDF first, so this also
+        covers Google Docs/Sheets/Slides that the caller has already identified.
         """
-        data = await self._read_pdf_bytes(file_id)
+        if type_hint is None:
+            type_hint = await self._type_of(file_id)
+        data = await self._fetch_file_bytes(file_id, type_hint)
         if data is None:
             return ""
 
@@ -1119,9 +1414,7 @@ class GoogleWorkspaceConnector:
         # Drive id, and answering from a reading of the old one is worse than
         # not answering: nothing on the page would say it is stale.
         fingerprint = str(len(data))
-        cached = await page_index.load_pages(
-            ctx.db, source_key=self.key, external_id=file_id, fingerprint=fingerprint
-        )
+        cached = await page_index.load_pages(ctx.db, source_key=self.key, external_id=file_id, fingerprint=fingerprint)
         missing = [index for index in wanted if index not in cached]
 
         # `transcribe=False` means "use whatever has already been read". The
@@ -1172,11 +1465,13 @@ class GoogleWorkspaceConnector:
         if prefix != self.key or not file_id:
             return None
 
-        if is_pdf(await self._type_of(file_id)):
+        type_hint = await self._type_of(file_id)
+
+        if is_pdf(type_hint):
             # With a context the viewer shows what the answer saw, diagrams
             # included; without one it degrades to the text layer rather than
             # refusing.
-            text = await self._read_pdf(file_id, ctx=ctx)
+            text = await self._read_pdf(file_id, type_hint=type_hint, ctx=ctx)
             if not text:
                 return None
             return {
@@ -1187,10 +1482,61 @@ class GoogleWorkspaceConnector:
                 "preview_pages": len(await self.page_images(hit_id)),
             }
 
+        if is_image(type_hint):
+            # A standalone image has no text body, but the picture itself is
+            # the content. The viewer will request it from /api/preview.
+            pages = await self.page_images(hit_id)
+            if not pages:
+                return None
+            return {
+                "title": self._titles.get(file_id, file_id),
+                "text": "",
+                "language": None,
+                "truncated": False,
+                "preview_pages": len(pages),
+            }
+
+        if is_google_workspace_editor(type_hint):
+            # Native Google files are exported to PDF for preview. Google Docs
+            # also fetch their text body; Sheets are read via the Sheets API to
+            # bypass the Drive export size limit.
+            pages = await self.page_images(hit_id)
+            text = ""
+            if is_google_doc(type_hint):
+                try:
+                    raw = await self._call(
+                        "manage_docs", {"email": self._account, "operation": "get", "documentId": file_id}
+                    )
+                    text = extract_report_body(raw.text)
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("could not read doc %s: %s", file_id, summarise_exception(exc))
+
+            if not text and is_google_spreadsheet(type_hint):
+                sheet_text = await self._read_sheet_text(file_id)
+                if sheet_text:
+                    text = sheet_text
+
+            # PDF export has a size limit. Drive text export is the last resort.
+            if not pages and not text:
+                try:
+                    exported = await self._export_workspace_text(file_id, type_hint)
+                    if exported:
+                        text = exported.decode("utf-8", errors="ignore")
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("could not export text for %s: %s", file_id, summarise_exception(exc))
+
+            if not pages and not text:
+                return None
+            return {
+                "title": self._titles.get(file_id, file_id),
+                "text": text[:MAX_CONTENT_CHARS],
+                "language": None,
+                "truncated": len(text) > MAX_CONTENT_CHARS,
+                "preview_pages": len(pages),
+            }
+
         try:
-            raw = await self._call(
-                "manage_docs", {"email": self._account, "operation": "get", "documentId": file_id}
-            )
+            raw = await self._call("manage_docs", {"email": self._account, "operation": "get", "documentId": file_id})
         except Exception as exc:  # noqa: BLE001 - reported to the caller as absent
             logger.info("could not read %s: %s", file_id, summarise_exception(exc))
             return None

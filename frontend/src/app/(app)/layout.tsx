@@ -63,7 +63,7 @@ export default async function AppLayout({
               href="/chat"
               className="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white"
             >
-              <Wordmark className="h-5" />
+              <Wordmark className="h-6" />
             </Link>
 
             <LayoutSwitch />

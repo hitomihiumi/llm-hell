@@ -19,9 +19,7 @@ import { cn } from "@/lib/utils";
  */
 // Labels come from the dictionary rather than this list, so the routes
 // stay one thing and the words another.
-const OPTIONS = [
-  { href: "/chat", key: "chat" as const },
-];
+const OPTIONS = [{ href: "/chat", key: "chat" as const }];
 
 export function LayoutSwitch() {
   const pathname = usePathname();
