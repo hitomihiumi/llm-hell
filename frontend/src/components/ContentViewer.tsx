@@ -36,6 +36,7 @@ export function ContentViewer({
 }) {
   const { copy } = useCopy();
   const [content, setContent] = useState<Content | null>(null);
+  const [showText, setShowText] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -78,6 +79,8 @@ export function ContentViewer({
   // Markdown gets rendered; anything else is shown as-is in monospace,
   // because a source file that has been prettified is no longer the file.
   const isMarkdown = content?.language === "markdown";
+  // The text folds away only when there is something better to look at.
+  const foldable = (content?.preview_pages ?? 0) > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -147,18 +150,40 @@ export function ContentViewer({
             </div>
           )}
 
-          {content &&
-            (isMarkdown ? (
-              <AnswerMarkdown
-                text={content.text}
-                citations={[]}
-                onJump={() => {}}
-              />
-            ) : (
-              <pre className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words text-white/75">
-                {content.text}
-              </pre>
-            ))}
+          {content?.text && (
+            <div>
+              {/* Only offered when there are pages. Opening a source file or
+                  a database row and finding a collapsed panel with nothing
+                  visible would be a worse viewer, not a tidier one - the
+                  fold exists because the pictures are the better answer,
+                  and where there are none the text is all there is. */}
+              {foldable && (
+                <button
+                  type="button"
+                  onClick={() => setShowText(!showText)}
+                  className="font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white"
+                >
+                  {showText ? copy.card.hideText : copy.card.showText}
+                </button>
+              )}
+
+              {(showText || !foldable) && (
+                <div className={foldable ? "mt-4" : undefined}>
+                  {isMarkdown ? (
+                    <AnswerMarkdown
+                      text={content.text}
+                      citations={[]}
+                      onJump={() => {}}
+                    />
+                  ) : (
+                    <pre className="font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words text-white/75">
+                      {content.text}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {content?.truncated && (
             <p className="mt-6 border-t border-hairline pt-4 font-mono text-[10px] uppercase tracking-[0.24em] text-white/35">

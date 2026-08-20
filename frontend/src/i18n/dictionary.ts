@@ -164,9 +164,9 @@ const en: Copy = {
     title: "Ask anything",
     lede: "Answers come from your Drive, GitLab and internal records — with the sources attached.",
     suggestions: [
-      "How does result ranking work?",
-      "Why must the KV cache be fp8?",
-      "What breaks when the open-file limit is too low?",
+      "On the F722 board, which side is the USB port on relative to the MCU?",
+      "What is in the auth-service README?",
+      "Why is the recency boost deliberately tiny?",
     ],
     placeholder: "Ask a question…  (Enter to send, Shift+Enter for a new line)",
     allSources: "All sources",
@@ -287,9 +287,9 @@ const uk: Copy = {
     title: "Запитайте будь-що",
     lede: "Відповіді збираються з вашого Drive, GitLab і внутрішніх записів — разом із джерелами.",
     suggestions: [
-      "Як працює ранжування результатів?",
-      "Чому KV-кеш має бути fp8?",
-      "Що ламається, коли ліміт відкритих файлів замалий?",
+      "З якого боку від MCU розташований USB-порт на платі F722?",
+      "Що написано в README репозиторію auth-service?",
+      "Чому приріст за свіжістю навмисно крихітний?",
     ],
     placeholder:
       "Поставте питання…  (Enter — надіслати, Shift+Enter — новий рядок)",
