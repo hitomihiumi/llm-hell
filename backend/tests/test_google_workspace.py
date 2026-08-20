@@ -7,9 +7,11 @@ from pypdf import PdfWriter
 
 from app.core.config import Settings
 from app.models.source import SOURCE_GOOGLE_DRIVE
+from app.schemas.search import SearchHit
 from app.services.mcp.google import (
     GoogleWorkspaceConnector,
     _workspace_text_mime_type,
+    _worth_reading,
     drive_size_hints,
     is_google_doc,
     is_google_spreadsheet,
@@ -116,7 +118,7 @@ async def test_fetch_content_reads_sheet_via_manage_sheets(monkeypatch):
     async def _call(tool, arguments):
         assert tool == "manage_sheets"
         assert arguments["operation"] == "read"
-        assert arguments["range"] == "A1:Z1000"
+        assert arguments["range"] == "A1:AZ1000"
 
         class Raw:
             text = "R1: task | status | date\nR2: print object | done | 2026-03-15"
@@ -134,8 +136,9 @@ async def test_fetch_content_reads_sheet_via_manage_sheets(monkeypatch):
 
     assert content is not None
     assert content["preview_pages"] == 0
-    assert "print object" in content["text"]
-    assert "2026-03-15" in content["text"]
+    # Addressed rather than raw: the viewer shows the same cells, with the
+    # same column letters, that the answer model was given. See services/sheets.
+    assert "R2: A=print object  B=done  C=2026-03-15" in content["text"]
 
 
 @pytest.mark.asyncio
@@ -193,3 +196,42 @@ async def test_pdf_export_is_skipped_for_large_files(monkeypatch):
 
     assert result is None
     assert calls == []  # Never attempted because the file is too large.
+
+
+# --- which hits are worth a second round trip --------------------------------
+
+
+def _hit(title: str, rank: int):
+    return SearchHit(id=f"google_drive:{rank}", source=SOURCE_GOOGLE_DRIVE, title=title, rank_in_source=rank)
+
+
+def test_a_file_the_question_names_is_read_first():
+    """Drive put three weekly progress reports above the spreadsheet actually
+    called "Gantt Chart", so the one file the question pointed at was never
+    opened - it reached the answer as a title with an empty snippet."""
+    hits = [
+        _hit("Copy of Week 8 Progress Report", 0),
+        _hit("Copy of Week 9 Progress Report", 1),
+        _hit("Week 8 Progress Report", 2),
+        _hit("Wisco Wingmen Gantt Chart", 3),
+    ]
+
+    chosen = _worth_reading(hits, "according to the gantt chart when was the team object 3d printed", 3)
+
+    assert chosen[0].title == "Wisco Wingmen Gantt Chart"
+
+
+def test_rank_still_decides_when_no_title_matches():
+    """Nothing clever when there is nothing to be clever about: Drive's own
+    order is the best guess available."""
+    hits = [_hit("alpha", 0), _hit("beta", 1), _hit("gamma", 2)]
+
+    chosen = _worth_reading(hits, "something else entirely", 2)
+
+    assert [hit.title for hit in chosen] == ["alpha", "beta"]
+
+
+def test_only_as_many_as_the_budget_allows():
+    hits = [_hit(f"file {index}", index) for index in range(10)]
+
+    assert len(_worth_reading(hits, "file", 3)) == 3

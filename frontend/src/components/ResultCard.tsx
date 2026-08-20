@@ -28,6 +28,11 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
   // Short excerpts read as a caption and belong in the open. Only the long
   // ones - a transcribed page, a whole README - need folding away.
   const long = (hit.snippet?.length ?? 0) > SNIPPET_FOLD_CHARS;
+  // A spreadsheet is a grid, and a grid reflowed into a paragraph is a wall
+  // of `B=... G=X` with its rows run together. Monospaced, unwrapped and
+  // scrollable keeps one sheet row on one line, which is the only form in
+  // which it can be read.
+  const grid = hit.snippet_format === "grid";
   const date = formatDate(hit.timestamp);
   // Internal record links route inside the app; everything else is an
   // external permalink and opens in a new tab.
@@ -102,11 +107,16 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
             >
               {showText ? copy.card.hideText : copy.card.showText}
             </button>
-            {showText && (
-              <p className="mt-3 text-sm leading-relaxed text-white/55">
-                {hit.snippet}
-              </p>
-            )}
+            {showText &&
+              (grid ? (
+                <pre className="mt-3 overflow-x-auto whitespace-pre border border-hairline p-3 font-mono text-[11px] leading-relaxed text-white/55">
+                  {hit.snippet}
+                </pre>
+              ) : (
+                <p className="mt-3 text-sm leading-relaxed text-white/55">
+                  {hit.snippet}
+                </p>
+              ))}
           </div>
         ) : (
           <p className="mt-3 pl-9 text-sm leading-relaxed text-white/55">

@@ -25,6 +25,10 @@ export interface SearchHit {
   // How many page pictures this hit can show, or null when it has none.
   // Set by the source that knows, so a card never has to ask.
   preview_pages: number | null;
+  // "grid" when the snippet is a spreadsheet rendered row by row rather than
+  // prose. Its columns are its meaning, so it is shown monospaced and
+  // unwrapped instead of being reflowed into a paragraph.
+  snippet_format?: "text" | "grid";
   rank_in_source: number;
   score: number;
 }

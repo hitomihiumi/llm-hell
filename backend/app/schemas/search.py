@@ -37,6 +37,13 @@ class SearchHit(BaseModel):
     # that quietly showed something else would be worse than none.
     preview_pages: int | None = None
 
+    # "grid" when the snippet is a rendered spreadsheet rather than prose.
+    # Two things downstream need to know. The answer prompt gives a grid a
+    # larger character budget, because trimming it costs whole rows and the
+    # rows that give a cell its meaning sit at the two ends of the sheet.
+    # And the viewer shows it monospaced, since its columns are its meaning.
+    snippet_format: Literal["text", "grid"] = "text"
+
     # Position within its own source's result list, 0-based. This is the
     # only ranking signal that means the same thing across sources, and it
     # is what rank fusion consumes.

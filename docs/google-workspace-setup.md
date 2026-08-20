@@ -176,6 +176,30 @@ the application, not just Google's.
 content comes from a second call per hit, bounded by `GOOGLE_ENRICH_HITS`.
 Setting it to 0 disables that and leaves answers with nothing to cite.
 
+Which hits get that call is decided by title first, then by Drive's rank.
+Asked *"according to the gantt chart, when was the team object 3d printed"*,
+Drive put three weekly progress reports above the spreadsheet actually called
+**Gantt Chart**, and with a budget of three the one file the question named
+was never opened — it reached the answer as a title with an empty snippet.
+
+**An answer about a spreadsheet quotes the wrong cells.** A sheet is the one
+source here whose meaning is positional: a cell says `X` and nothing else, and
+what it means comes from the row label to its left and the header rows above
+it. Rows are therefore sent to the model addressed —
+
+```
+R4:  B=Task  C=1  D=8  E=12  F=15  G=18  H=19
+R31: B=3D print parts for the Team Object  G=X  H=O
+```
+
+— so that `G` is looked up rather than arrived at by counting pipe
+characters across fifty rows. The same model answered from columns four
+places off when given the raw grid, and answered "September 18" when given
+this one. `ANSWER_SHEET_CHARS` is the budget; when a sheet exceeds it, the
+matching rows are kept first, then the header band, then the legend, because
+a header band with nothing under it answers nothing. See
+`backend/app/services/sheets.py`.
+
 **Results come back but the UI shows none.** The source badge will say
 *"the response could not be parsed as JSON or as a Markdown report"*. This
 server answers in Markdown, not JSON, so that means its report format has

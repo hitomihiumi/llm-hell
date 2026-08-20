@@ -123,6 +123,24 @@ def test_render_hit_numbers_from_one():
     assert render_hit(1, hits(1)[0], snippet_chars=100).startswith("[1] source=s")
 
 
+def test_a_spreadsheet_keeps_its_own_budget():
+    """A grid trimmed to the prose budget loses whole rows, and the rows that
+    say what a column means are at the two ends of the sheet. Its source
+    already trimmed it; cutting it again here would undo that."""
+    hit = hits(1, snippet_chars=3000)[0]
+    hit.snippet_format = "grid"
+
+    rendered = render_hit(1, hit, snippet_chars=200, grid_chars=4000)
+
+    assert len(rendered) > 3000
+
+
+def test_prose_is_still_cut_to_the_prose_budget():
+    rendered = render_hit(1, hits(1, snippet_chars=3000)[0], snippet_chars=200, grid_chars=4000)
+
+    assert len(rendered) < 300
+
+
 def test_build_prompt_includes_every_hit_when_the_window_is_large():
     messages, included = build_prompt("q", hits(5), endpoint(), settings=settings())
     assert len(included) == 5

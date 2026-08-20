@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     # Per-hit snippet cap applied BEFORE token counting, so one enormous
     # document cannot eat the whole prompt budget on its own.
     answer_snippet_chars: int = 1200
+    # A spreadsheet gets its own, larger budget. A grid is not prose: cutting
+    # it costs whole rows, and the rows that give a cell its meaning - the
+    # header band and the legend - are at the two ends of the sheet rather
+    # than beside the row that matched. 1200 characters of a Gantt chart is
+    # a page of `| | | X` with no dates attached to it.
+    answer_sheet_chars: int = 4000
     # Headroom left free inside ctx_window for the system prompt, the
     # question, and the chat template's own overhead.
     answer_ctx_reserve_tokens: int = 2048

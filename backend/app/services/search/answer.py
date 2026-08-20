@@ -101,6 +101,17 @@ connects, or what a label says is answered from the picture, not from the \
 text beside it.
 - Answer the question that was asked. If it asks where something is, give the \
 position; naming the part instead is not an answer.
+- A spreadsheet arrives as one line per row, every filled cell written \
+column=value. A cell means nothing on its own: read it together with its row \
+label and with the header rows at the top of the sheet, matched by COLUMN \
+LETTER. A header row that fills only every few columns is merged - its value \
+covers every column up to the next filled one.
+- There is usually MORE THAN ONE header row, and the answer is built from all \
+of them. If a row reads `R31: B=paint the hull  G=X` and the header rows read \
+`R3: C=Sep  M=Oct` and `R4: C=1  D=8  G=18`, then the hull was painted on \
+September 18 - column G, the month Sep because Sep covers C to L, the day 18 \
+from the day row. Answer with that date, never with a column letter and never \
+with the week number.
 - Write measurements in plain text, not LaTeX. Use Unicode symbols directly: \
 ⌀ for diameter, × for multiplication, ° for degrees, ± for plus-minus. \
 Never wrap values in $...$ or use \\varnothing, \\times, \\degree, etc.
@@ -171,14 +182,21 @@ def select_vision_endpoint(endpoints: list[ModelEndpoint], settings: Settings) -
     return None
 
 
-def render_hit(index: int, hit: SearchHit, *, snippet_chars: int) -> str:
-    """One numbered block. The number is what the model is told to cite."""
+def render_hit(index: int, hit: SearchHit, *, snippet_chars: int, grid_chars: int | None = None) -> str:
+    """One numbered block. The number is what the model is told to cite.
+
+    A spreadsheet gets `grid_chars` instead, and needs to: its source has
+    already trimmed it to that budget while keeping the header band and the
+    legend, and cutting it again here would take the header rows off the top
+    of the only thing that says what a column means.
+    """
     header = f"[{index}] source={hit.source} | {hit.title}"
     if hit.url:
         header += f" | {hit.url}"
     if hit.timestamp:
         header += f" | {hit.timestamp.date().isoformat()}"
-    snippet = (hit.snippet or "")[:snippet_chars]
+    limit = grid_chars if hit.snippet_format == "grid" and grid_chars else snippet_chars
+    snippet = (hit.snippet or "")[:limit]
     return f"{header}\n{snippet}"
 
 
@@ -236,7 +254,12 @@ def build_prompt(
     included: list[SearchHit] = []
     blocks: list[str] = []
     for hit in hits:
-        block = render_hit(len(included) + 1, hit, snippet_chars=settings.answer_snippet_chars)
+        block = render_hit(
+            len(included) + 1,
+            hit,
+            snippet_chars=settings.answer_snippet_chars,
+            grid_chars=settings.answer_sheet_chars,
+        )
         # The character heuristic rather than the endpoint's own /tokenize:
         # this runs per candidate hit, and an HTTP round-trip each would cost
         # far more than the packing decision is worth. The reserve in

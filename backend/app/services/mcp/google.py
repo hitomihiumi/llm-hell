@@ -58,6 +58,7 @@ import httpx
 from app.core.config import Settings
 from app.models.source import SOURCE_GOOGLE_DRIVE, SOURCE_GOOGLE_MAIL, Source
 from app.schemas.search import SearchHit
+from app.services import sheets
 from app.services.llm import vision
 from app.services.mcp.connector import (
     SearchContext,
@@ -738,6 +739,27 @@ def email_hit(item: dict[str, Any], rank: int, *, source_key: str, debug: bool) 
     )
 
 
+def _worth_reading(hits: list[SearchHit], query: str, count: int) -> list[SearchHit]:
+    """Which hits get their content fetched, when only `count` of them can.
+
+    Drive's rank alone was picking the wrong files. Asked "according to the
+    gantt chart, when was the team object 3d printed", Drive put three weekly
+    progress reports above the spreadsheet actually called "Gantt Chart", and
+    the one file the question named by name was never opened - it reached the
+    answer as a title with an empty snippet.
+
+    So a title that matches the question is read first. It costs nothing: the
+    same number of round trips, spent on the file the user pointed at.
+    """
+    terms = search_terms(query, limit=12)
+
+    def named(hit: SearchHit) -> int:
+        title = (hit.title or "").lower()
+        return sum(1 for term in terms if term in title)
+
+    return sorted(hits, key=lambda hit: (-named(hit), hit.rank_in_source))[:count]
+
+
 class GoogleWorkspaceConnector:
     """One searchable Google surface - Drive or Gmail."""
 
@@ -881,7 +903,9 @@ class GoogleWorkspaceConnector:
         enriched = 0
         if hits and self._settings.google_enrich_hits > 0:
             try:
-                enriched = await self._enrich(hits[: self._settings.google_enrich_hits], query=query, ctx=ctx)
+                enriched = await self._enrich(
+                    _worth_reading(hits, query, self._settings.google_enrich_hits), query=query, ctx=ctx
+                )
             except Exception as exc:  # noqa: BLE001 - snippets are a bonus, hits are the result
                 logger.warning("%s enrichment failed: %s", self.key, summarise_exception(exc))
                 result.degraded = True
@@ -1044,7 +1068,18 @@ class GoogleWorkspaceConnector:
                 if body is None and is_google_spreadsheet(type_hint):
                     # Sheets API reads values directly; this bypasses the Drive
                     # export size limit that breaks PDF/CSV export of huge sheets.
-                    body = await self._read_sheet_text(hit.external_id)
+                    #
+                    # Excerpted here rather than below, because a grid must not
+                    # be windowed like prose: the rows that give a cell its
+                    # meaning are the header band and the legend, which are
+                    # never next to the row that matched. See services/sheets.
+                    report = await self._read_sheet_text(hit.external_id)
+                    if report:
+                        hit.snippet = sheets.excerpt(report, query, self._settings.answer_sheet_chars)
+                        if hit.snippet:
+                            hit.snippet_format = "grid"
+                            enriched += 1
+                            continue
 
                 # PDF export has a size limit (especially for huge Sheets).
                 # A lightweight Drive text export is the last resort.
@@ -1512,9 +1547,11 @@ class GoogleWorkspaceConnector:
                     logger.info("could not read doc %s: %s", file_id, summarise_exception(exc))
 
             if not text and is_google_spreadsheet(type_hint):
-                sheet_text = await self._read_sheet_text(file_id)
-                if sheet_text:
-                    text = sheet_text
+                report = await self._read_sheet_text(file_id)
+                if report:
+                    # Addressed the same way the answer model saw it, so a
+                    # reader checking a citation is looking at the same cells.
+                    text = sheets.render(report) or report
 
             # PDF export has a size limit. Drive text export is the last resort.
             if not pages and not text:
