@@ -1,0 +1,212 @@
+{
+  "name": "llmhell-knowledge-base",
+  "displayName": "Knowledge Base (federated search)",
+  "description": "Search Google Workspace, GitLab and the internal knowledge base from the editor, with cited answers.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "llmhell",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "configuration": {
+      "title": "Knowledge Base",
+      "properties": {
+        "knowledgeBase.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "markdownDescription": "Origin of the knowledge-base API. The backend, not the web app \u2014 `http://localhost:8000`, not `:3001`."
+        },
+        "knowledgeBase.username": {
+          "type": "string",
+          "default": "",
+          "description": "Account to sign in as. The password is never stored here; run \"Knowledge Base: Sign In\" and it goes into the editor's secret storage."
+        },
+        "knowledgeBase.sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Source keys to search, e.g. `[\"gitlab\", \"google_drive\"]`. Empty means every enabled source. Also settable per window with \"Knowledge Base: Choose Sources\"."
+        },
+        "knowledgeBase.limit": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "How many results one search may return, across all sources."
+        },
+        "knowledgeBase.answer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask the model for a cited answer as well as the result list. Turning this off makes a search fast and costs no tokens."
+        },
+        "knowledgeBase.searchOnSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pre-fill the search box with the editor selection, or with the symbol under the cursor when nothing is selected."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "knowledgeBase",
+          "title": "Knowledge Base",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "knowledgeBase": [
+        {
+          "id": "knowledgeBase.results",
+          "name": "Results",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "knowledgeBase.results",
+        "contents": "Nothing searched yet.\n[Search the knowledge base](command:knowledgeBase.search)\n\nA question needs an account on the backend.\n[Sign in](command:knowledgeBase.signIn)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "knowledgeBase.search",
+        "title": "Search",
+        "category": "Knowledge Base",
+        "icon": "$(search)"
+      },
+      {
+        "command": "knowledgeBase.searchSelection",
+        "title": "Search for Selection",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.signIn",
+        "title": "Sign In",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.signOut",
+        "title": "Sign Out",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.chooseSources",
+        "title": "Choose Sources",
+        "category": "Knowledge Base",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "knowledgeBase.showAnswer",
+        "title": "Show Last Answer",
+        "category": "Knowledge Base",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "knowledgeBase.refresh",
+        "title": "Run the Last Search Again",
+        "category": "Knowledge Base",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "knowledgeBase.openExternal",
+        "title": "Open in Browser",
+        "category": "Knowledge Base",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "knowledgeBase.copyLink",
+        "title": "Copy Link",
+        "category": "Knowledge Base"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "knowledgeBase.search",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@1"
+        },
+        {
+          "command": "knowledgeBase.showAnswer",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@2"
+        },
+        {
+          "command": "knowledgeBase.chooseSources",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@3"
+        },
+        {
+          "command": "knowledgeBase.refresh",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "knowledgeBase.openExternal",
+          "when": "view == knowledgeBase.results && viewItem == hit.linked",
+          "group": "inline"
+        },
+        {
+          "command": "knowledgeBase.copyLink",
+          "when": "view == knowledgeBase.results && viewItem == hit.linked"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "knowledgeBase.searchSelection",
+          "when": "editorHasSelection",
+          "group": "navigation@9"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "knowledgeBase.openExternal",
+          "when": "false"
+        },
+        {
+          "command": "knowledgeBase.copyLink",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "knowledgeBase.searchSelection",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node20",
+    "watch": "pnpm run build --sourcemap --watch",
+    "package": "pnpm run build --minify",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check",
+    "format": "biome format --write",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.2",
+    "@types/node": "^20",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5"
+  },
+  "packageManager": "pnpm@11.15.1"
+}

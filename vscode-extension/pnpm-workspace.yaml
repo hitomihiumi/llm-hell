@@ -1,0 +1,5 @@
+# esbuild ships a platform binary and fetches it in a postinstall script, so
+# it needs an explicit yes under pnpm's build policy. It is the only build
+# script this project runs.
+allowBuilds:
+  esbuild: true

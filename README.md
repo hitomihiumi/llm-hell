@@ -270,6 +270,17 @@ two have already collided, `rm -rf .next` and restart `pnpm dev`.
 build on :3002, which is how a page can be checked without touching the dev
 server at all.
 
+```bash
+cd vscode-extension
+pnpm install
+pnpm test         # no extension host needed - see its README for why
+pnpm build && code --extensionDevelopmentPath=.
+```
+
+The editor client searches the same `/api/*` the web app does, signing in with
+a cookie session rather than a bearer key, so it needs no change on the
+backend. See `vscode-extension/README.md`.
+
 Tests use in-memory SQLite, so **no Postgres-only column types** may appear
 in `app/models/` — no `JSONB`, `ARRAY`, `UUID`, `TSVECTOR`. The first one
 added takes the whole API-level suite down with it.
@@ -305,6 +316,10 @@ frontend/src/
 docker/
   google-mcp/          the stdio->HTTP bridged Google server
   postgres/initdb/     kb database, kb_ro role, demo corpus
+vscode-extension/
+  src/format.ts        answer document, file names - pure, so node --test runs it
+  src/http.ts          cookies and base URLs - pure, same reason
+  src/client.ts        signs in the way the web app does; no server change needed
 tools/mcp_probe.py     standalone MCP prober
 docs/                  spike findings, Google runbook, test-database runbook, proxy notes
 ```
