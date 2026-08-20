@@ -156,6 +156,15 @@ class Settings(BaseSettings):
     # the expensive part of a request, and the second PDF in a result list is
     # rarely the one the question was about.
     answer_image_hits: int = 2
+
+    # --- query planning ---------------------------------------------------
+    # How many EXTRA phrasings the model may write for one question. 0 turns
+    # planning off and searches exactly what was typed, which is what this did
+    # before - a plan is an addition, never a replacement.
+    search_plan_queries: int = 3
+    # Short on purpose: this runs before the fan-out, so every second here is
+    # a second the user waits before any source is even asked.
+    search_plan_timeout_seconds: float = 20.0
     google_mcp_command: str = "npx"
     google_mcp_args: list[str] = ["-y", "@aaronsb/google-workspace-mcp"]
     google_client_id: str = ""

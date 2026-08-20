@@ -10,7 +10,7 @@ all-or-nothing is worse than no federation, because the failure is invisible
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +37,11 @@ class FederatedSearch:
     hits: list[SearchHit]
     source_status: list[SourceStatus]
     duration_ms: int
+    # Every phrasing that was actually run, the user's first. Surfaced so the
+    # interface can show what the search did rather than leaving a rewrite to
+    # happen invisibly - a result the user cannot connect to their question
+    # reads as a bug even when it is better.
+    queries: list[str] = field(default_factory=list)
 
 
 async def list_sources(db: AsyncSession, *, enabled_only: bool = True) -> list[Source]:
@@ -95,6 +100,50 @@ async def _run_one(
         )
 
 
+
+def _merge_attempts(attempts: list[SourceResult]) -> SourceResult:
+    """One source's results across every phrasing, as a single result.
+
+    A hit found by two phrasings keeps its BEST rank, because rank within a
+    source is what fusion consumes and a document that answered two ways is
+    not less relevant than one that answered once.
+
+    A source is failed only if it failed for every phrasing: one query timing
+    out while another returned is a degraded source, not a dead one.
+    """
+    if len(attempts) == 1:
+        return attempts[0]
+
+    merged = SourceResult(source_key=attempts[0].source_key)
+    best: dict[str, SearchHit] = {}
+
+    for attempt in attempts:
+        for hit in attempt.hits:
+            existing = best.get(hit.id)
+            if existing is None or hit.rank_in_source < existing.rank_in_source:
+                best[hit.id] = hit
+
+    merged.hits = sorted(best.values(), key=lambda hit: hit.rank_in_source)
+    # Re-numbered so ranks are contiguous again; fusion reads position, and a
+    # merged list with holes in it would weight hits by an accident of which
+    # phrasing found them.
+    for rank, hit in enumerate(merged.hits):
+        hit.rank_in_source = rank
+
+    succeeded = [attempt for attempt in attempts if attempt.ok]
+    merged.error = None if succeeded else attempts[0].error
+    merged.degraded = any(attempt.degraded for attempt in attempts) or (
+        bool(succeeded) and len(succeeded) < len(attempts)
+    )
+    # The whole fan-out ran concurrently, so the cost is the slowest leg.
+    merged.elapsed_ms = max(attempt.elapsed_ms for attempt in attempts)
+    merged.detail = {
+        **(succeeded[0].detail if succeeded else attempts[0].detail),
+        "queries_run": len(attempts),
+    }
+    return merged
+
+
 async def federated_search(
     db: AsyncSession,
     *,
@@ -105,7 +154,10 @@ async def federated_search(
     settings: Settings,
     requested_sources: list[str] | None = None,
     limit: int | None = None,
+    queries: list[str] | None = None,
 ) -> tuple[FederatedSearch, SearchQuery]:
+    """`queries` are the phrasings to run; `query` is what the user typed and
+    is what gets recorded. See `planner.py` for why there is more than one."""
     started = time.monotonic()
 
     sources = await list_sources(db)
@@ -114,21 +166,35 @@ async def federated_search(
     per_source_limit = settings.search_per_source_limit
     total_limit = limit or settings.search_total_limit
 
-    results: list[SourceResult] = list(
-        await asyncio.gather(
-            *(
-                _run_one(
-                    source,
-                    connector,
-                    query,
-                    limit=per_source_limit,
-                    ctx=ctx,
-                    timeout=settings.search_timeout_seconds,
+    # Every planned phrasing against every source, all at once. Concurrent
+    # rather than sequential because the queries are independent: three
+    # phrasings cost the latency of the slowest one, not the sum of three.
+    plans = queries or [query]
+    gathered: list[list[SourceResult]] = []
+    for attempt in await asyncio.gather(
+        *(
+            asyncio.gather(
+                *(
+                    _run_one(
+                        source,
+                        connector,
+                        plan,
+                        limit=per_source_limit,
+                        ctx=ctx,
+                        timeout=settings.search_timeout_seconds,
+                    )
+                    for source, connector in pairs
                 )
-                for source, connector in pairs
             )
+            for plan in plans
         )
-    )
+    ):
+        gathered.append(list(attempt))
+
+    results: list[SourceResult] = [
+        _merge_attempts([attempt[index] for attempt in gathered])
+        for index in range(len(pairs))
+    ]
 
     by_source = {result.source_key: result for result in results}
     weights = {source.key: source.weight for source, _ in pairs}
@@ -189,6 +255,7 @@ async def federated_search(
             hits=hits,
             source_status=status,
             duration_ms=duration_ms,
+            queries=plans,
         ),
         record,
     )

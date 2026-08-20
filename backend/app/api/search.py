@@ -37,6 +37,7 @@ from app.services.mcp.connector import SearchContext
 from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.registry import McpRegistry, get_mcp_registry
 from app.services.search import answer as answer_service
+from app.services.search import planner
 from app.services.search.service import federated_search
 from app.services.stats.recorder import RequestOutcome, record_request
 
@@ -177,6 +178,13 @@ async def search(
         debug=payload.debug,
     )
 
+    queries = await planner.plan_queries(
+        payload.query,
+        history=payload.history,
+        endpoint=endpoint,
+        http_client=http_client,
+        settings=settings,
+    )
     federated, record = await federated_search(
         db,
         user=current,
@@ -186,6 +194,7 @@ async def search(
         settings=settings,
         requested_sources=payload.sources,
         limit=payload.limit,
+        queries=queries,
     )
 
     answer_out: AnswerOut | None = None
@@ -213,6 +222,7 @@ async def search(
     return SearchResponse(
         query_id=federated.query_id,
         query=federated.query,
+        queries=federated.queries,
         hits=federated.hits,
         source_status=federated.source_status,
         answer=answer_out,
@@ -247,6 +257,13 @@ async def search_stream(
         )
 
         try:
+            queries = await planner.plan_queries(
+                payload.query,
+                history=payload.history,
+                endpoint=endpoint,
+                http_client=http_client,
+                settings=settings,
+            )
             federated, record = await federated_search(
                 db,
                 user=current,
@@ -254,6 +271,7 @@ async def search_stream(
                 registry=registry,
                 ctx=ctx,
                 settings=settings,
+                queries=queries,
                 requested_sources=payload.sources,
                 limit=payload.limit,
             )

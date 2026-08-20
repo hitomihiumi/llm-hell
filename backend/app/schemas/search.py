@@ -124,6 +124,10 @@ class AnswerOut(BaseModel):
 class SearchResponse(BaseModel):
     query_id: str
     query: str
+    # Every phrasing that was run, the user's own first. The model writes
+    # the rest; showing them is what makes a rewritten search legible instead
+    # of mysterious.
+    queries: list[str] = []
     hits: list[SearchHit] = Field(default_factory=list)
     source_status: list[SourceStatus] = Field(default_factory=list)
     answer: AnswerOut | None = None
