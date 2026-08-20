@@ -97,6 +97,27 @@ async def _seed_sources(db) -> None:
                 "enabled" if source.enabled else "disabled - no credentials configured",
             )
 
+    # Help operators notice when a source's configuration has drifted from its
+    # row: credentials added but the row is still disabled, or credentials
+    # removed but the row is still enabled.
+    configured_map = {key: _is_configured(key) for key in _DEFAULT_SOURCES}
+    for source in (await db.execute(select(Source).where(Source.key.in_(_DEFAULT_SOURCES)))).scalars().all():
+        should_be = configured_map.get(source.key)
+        if should_be is not None and source.enabled != should_be:
+            if should_be:
+                logger.warning(
+                    "Source %s has credentials configured but is disabled in the database. "
+                    "Enable it with PATCH /api/sources/%s or in the admin UI.",
+                    source.key,
+                    source.key,
+                )
+            else:
+                logger.warning(
+                    "Source %s is enabled but its credentials are no longer configured. "
+                    "It will fail on every search until disabled or re-configured.",
+                    source.key,
+                )
+
 
 async def _seed_mock_endpoints(db) -> None:
     existing = (await db.execute(select(func.count()).select_from(ModelEndpoint))).scalar_one()

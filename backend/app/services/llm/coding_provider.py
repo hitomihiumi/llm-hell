@@ -1,0 +1,287 @@
+"""A synthetic OpenAI-compatible provider backed by the backend's own search.
+
+When opencode asks model `llmhell/coder` a question, the backend does exactly
+what the web UI does: it federates the query across Drive, GitLab, Gmail and
+the Postgres KB, then synthesises an answer from the hits.  The result is
+returned as a normal chat completion, streaming or not.
+"""
+
+import json
+import logging
+import time
+import uuid
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import Settings
+from app.models.endpoint import ModelEndpoint
+from app.models.source import SOURCE_GOOGLE_DRIVE
+from app.models.user import User
+from app.schemas.search import ChatTurn, SearchHit
+from app.services.mcp.connector import SearchContext
+from app.services.mcp.google import GoogleWorkspaceConnector
+from app.services.mcp.registry import McpRegistry
+from app.services.search import answer as answer_service
+from app.services.search import planner
+from app.services.search.service import federated_search
+
+logger = logging.getLogger("llmhell.coding_provider")
+
+CODING_PROVIDER_MODEL_ID = "llmhell/coder"
+
+
+def _extract_query(messages: list[dict[str, Any]]) -> str | None:
+    """The last user message is what we search for."""
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+            # A vision-style message is a list of parts; concatenate text parts.
+            if isinstance(content, list):
+                return " ".join(
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                ).strip()
+    return None
+
+
+def _messages_to_history(messages: list[dict[str, Any]]) -> list[ChatTurn]:
+    """Convert OpenAI messages to the chat turns answer synthesis understands."""
+    history: list[ChatTurn] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role not in ("user", "assistant"):
+            continue
+        if isinstance(content, list):
+            text = " ".join(
+                part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
+            )
+        else:
+            text = content or ""
+        history.append(ChatTurn(role=role, content=text))
+    # The last user message is the query, not history.
+    if history and history[-1].role == "user":
+        history.pop()
+    return history
+
+
+async def _select_endpoints(db: AsyncSession, settings: Settings) -> tuple[ModelEndpoint | None, ModelEndpoint | None]:
+    endpoints = list((await db.execute(select(ModelEndpoint).order_by(ModelEndpoint.name))).scalars().all())
+    return (
+        answer_service.select_endpoint(endpoints, settings),
+        answer_service.select_vision_endpoint(endpoints, settings),
+    )
+
+
+async def _page_images(
+    hits: list[SearchHit], registry: McpRegistry, settings: Settings
+) -> dict[str, list[bytes]]:
+    """Same logic as the web search endpoint: attach preview images for hits."""
+    if not settings.answer_image_hits:
+        return {}
+
+    connector = registry.get(SOURCE_GOOGLE_DRIVE)
+    if not isinstance(connector, GoogleWorkspaceConnector):
+        return {}
+
+    images: dict[str, list[bytes]] = {}
+    for hit in hits:
+        if len(images) >= settings.answer_image_hits:
+            break
+        if hit.source != SOURCE_GOOGLE_DRIVE:
+            continue
+        try:
+            pages = await connector.page_images(hit.id)
+        except Exception as exc:  # noqa: BLE001 - pictures are a bonus
+            logger.warning("could not render pages of %s: %s", hit.id, exc)
+            continue
+        if pages:
+            images[hit.id] = pages
+    return images
+
+
+def _openai_chunk(chunk_id: str, model: str, delta: dict[str, Any], finish_reason: str | None = None) -> bytes:
+    payload: dict[str, Any] = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+async def _stream_answer(
+    query: str,
+    hits: list[SearchHit],
+    endpoint: ModelEndpoint,
+    chunk_id: str,
+    model: str,
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+    history: list[ChatTurn],
+    images: dict[str, list[bytes]],
+) -> AsyncIterator[bytes]:
+    """Yield OpenAI SSE chunks from the backend's answer stream."""
+    yield _openai_chunk(chunk_id, model, {"role": "assistant"})
+
+    final: answer_service.AnswerResult | None = None
+    async for kind, data in answer_service.synthesize_stream(
+        query,
+        hits,
+        endpoint,
+        settings=settings,
+        http_client=http_client,
+        history=history,
+        images=images,
+    ):
+        if kind == "token":
+            yield _openai_chunk(chunk_id, model, {"content": data["text"]})
+        elif kind == "done":
+            final = data
+        elif kind == "error":
+            yield _openai_chunk(chunk_id, model, {"content": f"\n\n(answer failed: {data.get('message', 'unknown')})"})
+
+    usage: dict[str, Any] | None = None
+    if final is not None:
+        usage = {
+            "prompt_tokens": final.prompt_tokens,
+            "completion_tokens": final.completion_tokens,
+            "total_tokens": final.prompt_tokens + final.completion_tokens,
+        }
+    yield _openai_chunk(chunk_id, model, {}, finish_reason="stop")
+    if usage:
+        yield f"data: {json.dumps({'usage': usage})}\n\n".encode()
+    yield b"data: [DONE]\n\n"
+
+
+async def chat_completions(
+    body: dict[str, Any],
+    *,
+    db: AsyncSession,
+    user: User,
+    settings: Settings,
+    registry: McpRegistry,
+    http_client: httpx.AsyncClient,
+) -> Response:
+    """Handle a chat completion request for `llmhell/coder`."""
+    messages = body.get("messages") or []
+    query = _extract_query(messages)
+    if not query:
+        return JSONResponse(
+            {"error": {"message": "no user message found", "type": "invalid_request"}},
+            status_code=400,
+        )
+
+    endpoint, vision = await _select_endpoints(db, settings)
+    if endpoint is None:
+        return JSONResponse(
+            {"error": {"message": "no answer model endpoint is registered", "type": "service_unavailable"}},
+            status_code=503,
+        )
+
+    history = _messages_to_history(messages)
+    stream = bool(body.get("stream", False))
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
+
+    try:
+        queries = await planner.plan_queries(
+            query,
+            history=history,
+            endpoint=endpoint,
+            http_client=http_client,
+            settings=settings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("query planning failed for coding provider")
+        return JSONResponse(
+            {"error": {"message": f"query planning failed: {exc}", "type": "internal_error"}},
+            status_code=500,
+        )
+
+    ctx = SearchContext(
+        db=db,
+        user=user,
+        http_client=http_client,
+        answer_endpoint=endpoint,
+        vision_endpoint=vision,
+        debug=False,
+    )
+
+    try:
+        federated, _record = await federated_search(
+            db,
+            user=user,
+            query=query,
+            registry=registry,
+            ctx=ctx,
+            settings=settings,
+            queries=queries,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("federated search failed for coding provider")
+        return JSONResponse(
+            {"error": {"message": f"search failed: {exc}", "type": "internal_error"}},
+            status_code=500,
+        )
+
+    images = await _page_images(federated.hits, registry, settings)
+
+    if stream:
+        return StreamingResponse(
+            _stream_answer(query, federated.hits, endpoint, chunk_id, CODING_PROVIDER_MODEL_ID, settings, http_client, history, images),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    result = await answer_service.synthesize(
+        query,
+        federated.hits,
+        endpoint,
+        settings=settings,
+        http_client=http_client,
+        history=history,
+        images=images,
+    )
+
+    text = result.text or ""
+    if result.error:
+        text += f"\n\n(answer failed: {result.error})"
+
+    payload: dict[str, Any] = {
+        "id": chunk_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": CODING_PROVIDER_MODEL_ID,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "total_tokens": result.prompt_tokens + result.completion_tokens,
+        },
+    }
+    return JSONResponse(payload)

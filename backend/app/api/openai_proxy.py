@@ -25,10 +25,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_keys import CurrentKeyUser
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.endpoint import ModelEndpoint
+from app.services.llm.coding_provider import CODING_PROVIDER_MODEL_ID
+from app.services.llm.coding_provider import chat_completions as coding_chat_completions
 from app.services.llm.model_routing import DEFAULT_LEVEL, published_model_ids, resolve_model
 from app.services.llm.reasoning import ReasoningStreamParser
+from app.services.mcp.registry import McpRegistry, get_mcp_registry
 from app.services.stats.recorder import RequestOutcome, extract_session_ids, record_request
 
 router = APIRouter(tags=["proxy"])
@@ -72,6 +76,10 @@ async def list_models(_: CurrentKeyUser, db: AsyncSession = Depends(get_db)) -> 
         for endpoint in endpoints
         for model_id, _level in published_model_ids(endpoint)
     ]
+    # The backend itself can answer coding questions using the same RAG
+    # pipeline that powers the web search UI.
+    if endpoints:
+        data.append({"id": CODING_PROVIDER_MODEL_ID, "object": "model", "created": created, "owned_by": "llmhell"})
     return {"object": "list", "data": data}
 
 
@@ -209,6 +217,7 @@ async def chat_completions(
     current: CurrentKeyUser,
     db: AsyncSession = Depends(get_db),
     http_client: httpx.AsyncClient = Depends(get_http_client),
+    registry: McpRegistry = Depends(get_mcp_registry),
 ) -> Response:
     user, api_key = current
 
@@ -222,6 +231,16 @@ async def chat_completions(
     session_id, parent_session_id = extract_session_ids(
         request.headers, api_key_id=api_key.id, messages=body.get("messages") or []
     )
+
+    if requested_model == CODING_PROVIDER_MODEL_ID:
+        return await coding_chat_completions(
+            body,
+            db=db,
+            user=user,
+            settings=get_settings(),
+            registry=registry,
+            http_client=http_client,
+        )
 
     outcome = RequestOutcome()
 
