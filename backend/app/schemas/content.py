@@ -14,3 +14,6 @@ class ContentOut(BaseModel):
     text: str
     language: str | None = None
     truncated: bool = False
+    # Same meaning as on a hit: how many page pictures the viewer may request
+    # from /api/preview. Zero for anything that is not a rendered document.
+    preview_pages: int = 0

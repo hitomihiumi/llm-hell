@@ -11,6 +11,7 @@ from app.api.debug import router as debug_router
 from app.api.metrics import router as metrics_router
 from app.api.openai_proxy import close_http_client
 from app.api.openai_proxy import router as openai_proxy_router
+from app.api.preview import router as preview_router
 from app.api.records import router as records_router
 from app.api.search import router as search_router
 from app.api.sources import router as sources_router
@@ -59,6 +60,7 @@ app.include_router(auth_router)
 app.include_router(search_router)
 app.include_router(sources_router)
 app.include_router(content_router)
+app.include_router(preview_router)
 app.include_router(records_router)
 app.include_router(debug_router)
 app.include_router(openai_proxy_router)

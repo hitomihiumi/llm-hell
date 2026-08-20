@@ -3,8 +3,12 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ContentViewer } from "@/components/ContentViewer";
+import { PagePreview } from "@/components/PagePreview";
 import { useCopy } from "@/i18n/LocaleProvider";
 import type { SearchHit } from "@/lib/types";
+
+// Above this an excerpt stops being a caption and starts being a document.
+const SNIPPET_FOLD_CHARS = 320;
 
 function formatDate(value: string | null): string | null {
   if (!value) return null;
@@ -20,6 +24,10 @@ function formatDate(value: string | null): string | null {
 export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
   const { copy } = useCopy();
   const [viewing, setViewing] = useState(false);
+  const [showText, setShowText] = useState(false);
+  // Short excerpts read as a caption and belong in the open. Only the long
+  // ones - a transcribed page, a whole README - need folding away.
+  const long = (hit.snippet?.length ?? 0) > SNIPPET_FOLD_CHARS;
   const date = formatDate(hit.timestamp);
   // Internal record links route inside the app; everything else is an
   // external permalink and opens in a new tab.
@@ -66,11 +74,45 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
         )}
       </div>
 
-      {hit.snippet && (
-        <p className="mt-3 pl-9 text-sm leading-relaxed text-white/55">
-          {hit.snippet}
-        </p>
-      )}
+      {/* The page itself, beside the excerpt. A claim taken from a diagram is
+          not checkable against text, so the picture belongs on the card and
+          not only behind a click. */}
+      {hit.preview_pages ? (
+        <div className="mt-3 pl-9">
+          <PagePreview
+            hitId={hit.id}
+            pages={hit.preview_pages}
+            variant="thumb"
+          />
+        </div>
+      ) : null}
+
+      {hit.snippet &&
+        (long ? (
+          /* A document read from its pages produces a wall of text - a whole
+             page of pin labels, in reading order. That is worth having and
+             worth checking, and it is not worth half a card by default: the
+             picture above says what the result is far faster than the
+             transcription does. */
+          <div className="mt-3 pl-9">
+            <button
+              type="button"
+              onClick={() => setShowText(!showText)}
+              className="font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white"
+            >
+              {showText ? copy.card.hideText : copy.card.showText}
+            </button>
+            {showText && (
+              <p className="mt-3 text-sm leading-relaxed text-white/55">
+                {hit.snippet}
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="mt-3 pl-9 text-sm leading-relaxed text-white/55">
+            {hit.snippet}
+          </p>
+        ))}
 
       <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 pl-9 font-mono text-[10px] uppercase tracking-[0.24em] text-white/35">
         <span className="border border-hairline px-1.5 py-0.5 text-white/50">
@@ -79,7 +121,7 @@ export function ResultCard({ hit, index }: { hit: SearchHit; index: number }) {
         <span>{hit.source}</span>
         {hit.author && <span>{hit.author}</span>}
         {date && <span>{date}</span>}
-      {/* Reading the source without leaving the results. The excerpt above
+        {/* Reading the source without leaving the results. The excerpt above
             is centred on the match and cut to 400 characters, which answers
             "is this relevant" and not "what does it say". */}
         <button

@@ -27,6 +27,16 @@ class SearchHit(BaseModel):
     author: str | None = None
     timestamp: datetime | None = None
 
+    # How many pages of this hit can be rendered as pictures, or None when
+    # none can. Set by the source that knows - only a PDF has pages - and
+    # read by the UI to decide whether to show a preview at all, rather than
+    # firing a request per card to find out.
+    #
+    # These are the pages that were actually used: the ones chosen for the
+    # answer prompt, not every page of the file. A preview of "the data used"
+    # that quietly showed something else would be worse than none.
+    preview_pages: int | None = None
+
     # Position within its own source's result list, 0-based. This is the
     # only ranking signal that means the same thing across sources, and it
     # is what rank fusion consumes.

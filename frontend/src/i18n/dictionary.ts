@@ -77,6 +77,8 @@ export interface Copy {
   };
   card: {
     view: string;
+    showText: string;
+    hideText: string;
     kinds: Record<string, string>;
   };
   badge: {
@@ -88,6 +90,7 @@ export interface Copy {
     generatedSql: string;
   };
   viewer: {
+    pages: (count: number) => string;
     eyebrow: string;
     close: string;
     truncated: string;
@@ -188,6 +191,8 @@ const en: Copy = {
   },
   card: {
     view: "View",
+    showText: "+ Show what was read",
+    hideText: "− Hide what was read",
     kinds: {
       document: "Doc",
       email: "Email",
@@ -208,6 +213,7 @@ const en: Copy = {
     generatedSql: "Generated SQL",
   },
   viewer: {
+    pages: (count) => `${count} page${count === 1 ? "" : "s"} the answer read`,
     eyebrow: "Source",
     close: "Close",
     truncated: "Truncated — open the source for the rest",
@@ -309,6 +315,8 @@ const uk: Copy = {
   },
   card: {
     view: "Дивитись",
+    showText: "+ Показати розпізнане",
+    hideText: "− Сховати розпізнане",
     kinds: {
       document: "Док",
       email: "Лист",
@@ -329,6 +337,7 @@ const uk: Copy = {
     generatedSql: "Згенерований SQL",
   },
   viewer: {
+    pages: (count) => `${count} сторінок, які читала відповідь`,
     eyebrow: "Джерело",
     close: "Закрити",
     truncated: "Обрізано — відкрийте джерело, щоб побачити решту",

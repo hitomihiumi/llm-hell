@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnswerMarkdown } from "@/components/AnswerMarkdown";
+import { PagePreview } from "@/components/PagePreview";
 import { useCopy } from "@/i18n/LocaleProvider";
 import { api } from "@/lib/api";
 
@@ -11,6 +12,7 @@ interface Content {
   text: string;
   language: string | null;
   truncated: boolean;
+  preview_pages: number;
 }
 
 /**
@@ -128,6 +130,22 @@ export function ContentViewer({
                 style={{ width: `${width}%` }}
               />
             ))}
+
+          {/* Pages first, then the text. What the model looked at, in the
+              order it matters: the picture answers the questions the text
+              cannot. */}
+          {content && content.preview_pages > 0 && (
+            <div className="mb-8">
+              <p className="mb-3 font-display text-[10px] uppercase tracking-[0.42em] text-white/40">
+                {copy.viewer.pages(content.preview_pages)}
+              </p>
+              <PagePreview
+                hitId={content.hit_id}
+                pages={content.preview_pages}
+                variant="full"
+              />
+            </div>
+          )}
 
           {content &&
             (isMarkdown ? (

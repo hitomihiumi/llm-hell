@@ -845,6 +845,11 @@ class GoogleWorkspaceConnector:
             if is_pdf(self._type_hints.get(hit.external_id)):
                 text = await self._read_pdf(hit.external_id, ctx=ctx, transcribe=False)
                 self._schedule_transcription(hit.external_id, ctx=ctx)
+                # How many pictures the UI may ask for. Counted here because
+                # the file is already open; the alternative is the browser
+                # firing a request per card to find out.
+                pages = await self.page_images(hit.id)
+                hit.preview_pages = len(pages) or None
                 if text:
                     # A wider window than the other surfaces get. A PDF's
                     # answer is often a diagram transcription several
@@ -1175,10 +1180,11 @@ class GoogleWorkspaceConnector:
             if not text:
                 return None
             return {
-                "title": file_id,
+                "title": self._titles.get(file_id, file_id),
                 "text": text[:MAX_CONTENT_CHARS],
                 "language": None,
                 "truncated": len(text) > MAX_CONTENT_CHARS,
+                "preview_pages": len(await self.page_images(hit_id)),
             }
 
         try:

@@ -22,6 +22,9 @@ export interface SearchHit {
   url: string | null;
   author: string | null;
   timestamp: string | null;
+  // How many page pictures this hit can show, or null when it has none.
+  // Set by the source that knows, so a card never has to ask.
+  preview_pages: number | null;
   rank_in_source: number;
   score: number;
 }
