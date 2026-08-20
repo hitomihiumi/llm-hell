@@ -1,0 +1,17 @@
+{
+  "tool": "execute_sql",
+  "arguments": {
+    "sql": "SELECT * FROM users"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "Error: relation \"users\" does not exist\nLINE 1: /* crystaldba */ SELECT * FROM users\n                                       ^",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": null
+}

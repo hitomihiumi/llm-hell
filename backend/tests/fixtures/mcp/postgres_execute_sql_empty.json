@@ -1,0 +1,17 @@
+{
+  "tool": "execute_sql",
+  "arguments": {
+    "sql": "SELECT json_agg(t)::text AS payload FROM (SELECT id FROM articles WHERE title = 'nothing-matches-this') t"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "[{'payload': None}]",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": null
+}

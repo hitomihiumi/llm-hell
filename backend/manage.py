@@ -15,15 +15,18 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 
 from app.core.api_keys import generate_api_key, hash_api_key
 from app.core.db import SessionLocal
+from app.core.security import hash_password
 from app.models.api_key import ApiKey
 from app.models.endpoint import DEFAULT_REASONING_PROFILE, ModelEndpoint
+from app.models.source import Source
 from app.models.user import User
 from app.services.llm.model_routing import published_model_ids
 from app.services.llm.probe import check_endpoint
@@ -38,11 +41,47 @@ async def cmd_create_user(args: argparse.Namespace) -> None:
             print(f"user {args.username!r} already exists (id={existing.id})", file=sys.stderr)
             raise SystemExit(1)
 
-        user = User(username=args.username, role=args.role)
+        user = User(
+            username=args.username,
+            role=args.role,
+            email=args.email,
+            display_name=args.display_name,
+            # Without --password the account can still use the API-key
+            # proxy but cannot log in to the web app, which is the pre-web
+            # behaviour and stays the default.
+            password_hash=hash_password(args.password) if args.password else None,
+        )
         db.add(user)
         await db.commit()
         await db.refresh(user)
-        print(f"created user {user.username!r} (id={user.id}, role={user.role})")
+        login = "can log in to the web app" if user.password_hash else "API key only, no web login"
+        print(f"created user {user.username!r} (id={user.id}, role={user.role}) - {login}")
+
+
+async def cmd_set_password(args: argparse.Namespace) -> None:
+    async with SessionLocal() as db:
+        user = (await db.execute(select(User).where(User.username == args.username))).scalar_one_or_none()
+        if user is None:
+            print(f"unknown user {args.username!r}", file=sys.stderr)
+            raise SystemExit(1)
+
+        user.password_hash = hash_password(args.password)
+        await db.commit()
+        print(f"password set for {user.username!r}")
+
+
+async def cmd_list_sources(args: argparse.Namespace) -> None:
+    async with SessionLocal() as db:
+        sources = (await db.execute(select(Source).order_by(Source.key))).scalars().all()
+        if not sources:
+            print("no sources - they are seeded on app startup, so start the API once")
+            return
+        for source in sources:
+            state = "enabled" if source.enabled else "disabled"
+            checked = source.last_checked_at.isoformat() if source.last_checked_at else "never"
+            print(f"{source.key:<16} {source.kind:<18} {state:<9} weight={source.weight:<5} checked={checked}")
+            if source.last_check_result:
+                print(f"    last check: {json.dumps(source.last_check_result)[:200]}")
 
 
 async def cmd_issue_key(args: argparse.Namespace) -> None:
@@ -70,7 +109,7 @@ async def cmd_revoke_key(args: argparse.Namespace) -> None:
             print(f"no key with prefix {args.key_prefix!r}", file=sys.stderr)
             raise SystemExit(1)
 
-        api_key.revoked_at = datetime.now(timezone.utc)
+        api_key.revoked_at = datetime.now(UTC)
         await db.commit()
         print(f"revoked key {api_key.name!r} (prefix={api_key.key_prefix})")
 
@@ -277,6 +316,72 @@ async def cmd_list_endpoints(args: argparse.Namespace) -> None:
             )
 
 
+async def cmd_probe_vision(args: argparse.Namespace) -> None:
+    """Ask a vision endpoint to read a picture with known words in it.
+
+    Worth having as its own command because every way of finding this out
+    through the app is slow and indirect: a search has to match a PDF, the
+    reading happens in the background, and a model that cannot see images
+    fails by returning nothing - which looks exactly like a page that had
+    nothing on it.
+
+    The image is generated rather than loaded, so this works on a fresh
+    checkout with no documents and no Drive account, and the check is whether
+    the words come back rather than whether the call returned 200. A
+    text-only model answers politely and scores zero.
+    """
+    import io
+
+    import httpx
+    from PIL import Image, ImageDraw
+
+    from app.services.llm import vision
+
+    words = ["UART3", "JP1", "BAT+", "SDA"]
+
+    image = Image.new("RGB", (760, 240), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((20, 20), "PROBE PAGE", fill="black")
+    for offset, word in enumerate(words):
+        draw.text((20, 70 + offset * 36), f"{word} -> pad {offset + 1}", fill="black")
+    draw.rectangle([560, 60, 730, 200], outline="black", width=3)
+    draw.text((580, 120), "connector", fill="black")
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=90)
+
+    async with SessionLocal() as db:
+        endpoint = await db.get(ModelEndpoint, args.endpoint_id)
+        if endpoint is None:
+            print(f"no such endpoint: {args.endpoint_id!r}", file=sys.stderr)
+            raise SystemExit(1)
+        model_id, base_url = endpoint.model_id, endpoint.base_url
+
+    print(f"endpoint: {model_id} at {base_url}")
+    started = time.monotonic()
+    async with httpx.AsyncClient(timeout=300) as client:
+        text = await vision.describe_page(endpoint, buffer.getvalue(), http_client=client, timeout=300)
+    elapsed = time.monotonic() - started
+
+    if not text:
+        print(f"FAILED: no text after {elapsed:.0f}s")
+        print("  A thinking model does this - it spends the budget reasoning and")
+        print("  returns an empty content field. Use an -instruct variant.")
+        raise SystemExit(1)
+
+    found = [word for word in words if word.lower() in text.lower()]
+    print(f"read {len(text)} chars in {elapsed:.0f}s")
+    print(f"recognised {len(found)} of {len(words)} planted words: {found}")
+    print()
+    print(text[:600])
+
+    if not found:
+        print()
+        print("FAILED: the model replied but read none of the words - it is")
+        print("  probably not receiving the image at all.")
+        raise SystemExit(1)
+
+
 async def cmd_probe_endpoint(args: argparse.Namespace) -> None:
     async with SessionLocal() as db:
         endpoint = await db.get(ModelEndpoint, args.endpoint_id)
@@ -286,7 +391,7 @@ async def cmd_probe_endpoint(args: argparse.Namespace) -> None:
 
         report = await check_endpoint(endpoint)
 
-        endpoint.last_checked_at = datetime.now(timezone.utc)
+        endpoint.last_checked_at = datetime.now(UTC)
         endpoint.last_check_result = report.to_dict()
         await db.commit()
 
@@ -314,7 +419,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = subparsers.add_parser("create-user", help="Create a new tester/admin account")
     p.add_argument("username")
     p.add_argument("--role", choices=["user", "admin"], default="user")
+    p.add_argument("--password", default=None, help="Enables web login. Omit for an API-key-only account.")
+    p.add_argument("--email", default=None, help="Display metadata only - the login identifier is the username")
+    p.add_argument("--display-name", default=None)
     p.set_defaults(func=cmd_create_user)
+
+    p = subparsers.add_parser("set-password", help="Set or reset a user's web login password")
+    p.add_argument("username")
+    p.add_argument("password")
+    p.set_defaults(func=cmd_set_password)
+
+    p = subparsers.add_parser("list-sources", help="List the configured search sources")
+    p.set_defaults(func=cmd_list_sources)
 
     p = subparsers.add_parser("issue-key", help="Issue a new API key for a user")
     p.add_argument("username")
@@ -401,6 +517,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("endpoint_id")
     p.set_defaults(func=cmd_probe_endpoint)
+
+    p = subparsers.add_parser(
+        "probe-vision", help="Check that an endpoint can actually read an image"
+    )
+    p.add_argument("endpoint_id")
+    p.set_defaults(func=cmd_probe_vision)
 
     return parser
 

@@ -1,0 +1,18 @@
+{
+  "tool": "list_objects",
+  "arguments": {
+    "schema_name": "public",
+    "object_type": "table"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "[{'schema': 'public', 'name': 'articles', 'type': 'BASE TABLE'}, {'schema': 'public', 'name': 'tickets', 'type': 'BASE TABLE'}]",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": null
+}

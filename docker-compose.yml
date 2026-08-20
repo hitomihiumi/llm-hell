@@ -10,6 +10,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pg_data:/var/lib/postgresql/data
+      # Creates the `kb` database, the read-only kb_ro role, and the demo
+      # corpus. These run ONLY when the data volume is empty - on an
+      # existing stack, pipe them through psql by hand (the header of
+      # 01-create-kb.sql has the command).
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -34,7 +39,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      # The same directory google-mcp writes downloads into, mounted at the
+      # same path so the `**Path:**` it reports back is directly usable.
+      # READ-ONLY here: this container consumes those files and must never be
+      # able to touch the OAuth tokens sharing the mount.
+      - ./secrets/google-workspace/share:/data/share/google-workspace-mcp:ro
+    # Migrations run on startup rather than as a documented manual step -
+    # nothing ran them before, so a fresh stack came up against an empty
+    # database and every request 500'd until somebody remembered.
+    #
+    # No `--workers`: the Google Workspace MCP server can be run as a child
+    # process of this one (google_mcp_mode=stdio), and N workers would mean N
+    # subprocesses writing the same OAuth token file. See
+    # app/services/mcp/registry.py.
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     ports:
       # Not loopback-only: this is the OpenAI-compatible endpoint opencode on
       # testers' machines talks to over the network.
@@ -46,6 +65,129 @@ services:
       # on native Linux Docker - it must bind 0.0.0.0, see README). Works on
       # Linux too, not just Docker Desktop, since Docker 20.10.
       - "host.docker.internal:host-gateway"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Server-side only. The browser never sees this - it talks to the web
+      # container's own origin, and /api/* is forwarded from here, which is
+      # what keeps cookie auth same-origin with no CORS involved.
+      BACKEND_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      # 3001 on the host because Grafana already owns 3000 and moving it
+      # would break existing bookmarks and the README for no gain.
+      - "3001:3000"
+
+  # --- MCP servers ---------------------------------------------------------
+  # Each searchable source is a separate MCP server the API talks to as a
+  # client. They are exposed on loopback host ports purely so
+  # `tools/mcp_probe.py` can reach them from outside the compose network;
+  # the API uses the internal service names.
+
+  gitlab-mcp:
+    # zereight/gitlab-mcp, NOT the harshmaur fork this project was first
+    # pointed at: that fork is a stale 1-star copy whose own README redirects
+    # here, and it lacks every code-search tool.
+    image: zereight050/gitlab-mcp
+    restart: unless-stopped
+    environment:
+      STREAMABLE_HTTP: "true"
+      HOST: "0.0.0.0"
+      PORT: "3002"
+      GITLAB_PERSONAL_ACCESS_TOKEN: ${GITLAB_PERSONAL_ACCESS_TOKEN:-}
+      GITLAB_API_URL: ${GITLAB_API_URL:-https://gitlab.com/api/v4}
+      # Read-only: this is a search integration and has no business
+      # creating issues or pushing commits.
+      GITLAB_PERMISSION_MODE: readonly
+      # The `search` toolset holds the code-search tools and is NOT active by
+      # default - `discover_tools` reports it as active:false, isDefault:false,
+      # which is why a stock container exposes 63 tools and none of them
+      # searches code. Naming toolsets explicitly also drops the merge-request
+      # and issue tools we would only list and discard.
+      GITLAB_TOOLSETS: search,repositories,projects
+      # The server refuses to start with STREAMABLE_HTTP and a server-side
+      # PAT unless the endpoint itself is gated - otherwise anything that
+      # can reach the port inherits the token. This is a shared secret
+      # between the api container and this one, unrelated to the GitLab PAT.
+      STREAMABLE_HTTP_AUTH_TOKEN: ${GITLAB_MCP_AUTH_TOKEN:-}
+      # DNS-rebinding protection. The server only trusts a loopback Host
+      # header by default, so a request from another container - whose Host
+      # is `gitlab-mcp:3002` - is refused with
+      #   403 {"error":"Host header is not allowed"}
+      # which looks exactly like an auth failure and is not one. The
+      # loopback entries keep tools/mcp_probe.py working from the host.
+      MCP_ALLOWED_HOSTS: gitlab-mcp:3002,localhost:3102,127.0.0.1:3102
+    extra_hosts:
+      # The GitLab being searched runs on the host, outside this compose
+      # project, so GITLAB_API_URL points at host.docker.internal.
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:3102:3002"
+
+  google-mcp:
+    build:
+      context: ./docker/google-mcp
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    volumes:
+      # Read-WRITE, both of them: the server refreshes OAuth tokens and
+      # rewrites the files in place. A read-only mount works until the first
+      # token expiry and then fails in a way that looks like revoked access.
+      #
+      # These are produced on a workstation by completing the browser consent
+      # once - it cannot happen inside a container. See
+      # docs/google-workspace-setup.md.
+      - ./secrets/google-workspace/config:/data/config/google-workspace-mcp
+      - ./secrets/google-workspace/share:/data/share/google-workspace-mcp
+    ports:
+      # Loopback only, for tools/mcp_probe.py. The api container reaches it
+      # by service name.
+      - "127.0.0.1:3103:3003"
+    profiles:
+      # Opt-in: without OAuth credentials this container starts and then
+      # fails every call, and a demo of the other two sources should not
+      # have to look at that. Bring it up with
+      #   docker compose --profile google up -d google-mcp
+      - google
+
+  postgres-mcp:
+    image: crystaldba/postgres-mcp
+    restart: unless-stopped
+    # --access-mode=restricted parses every statement with pglast and
+    # refuses anything that is not read-only. It is the second of three
+    # layers - the first is a validator in text2sql.py, the third and only
+    # non-bypassable one is that kb_ro genuinely cannot write.
+    #
+    # SSE, not streamable-http. The released image (v0.3.0) offers exactly
+    # two transports - `postgres-mcp --help` says "choose from stdio, sse" -
+    # and the flags are --sse-host/--sse-port, not --host/--port. Reports of
+    # a streamable-http option describe an unreleased build. The endpoint
+    # path is /sse.
+    command:
+      - "--transport"
+      - "sse"
+      - "--sse-host"
+      - "0.0.0.0"
+      - "--sse-port"
+      - "8000"
+      - "--access-mode"
+      - "restricted"
+    environment:
+      # libpq form, NOT +asyncpg - this is not SQLAlchemy.
+      DATABASE_URI: ${KB_DATABASE_URI:-postgresql://kb_ro:kb_ro_password@postgres:5432/kb}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8002:8000"
 
   prometheus:
     image: prom/prometheus:v2.55.1

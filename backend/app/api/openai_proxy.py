@@ -15,7 +15,8 @@ bytes is parsed on the side (`ReasoningStreamParser`, already used for the
 
 import json
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -44,6 +45,15 @@ def get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         _http_client = httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT)
     return _http_client
+
+
+async def close_http_client() -> None:
+    """Called from the app lifespan. Safe to call when no client was ever
+    created, and safe to call twice."""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
 
 
 async def _list_enabled_endpoints(db: AsyncSession) -> list[ModelEndpoint]:

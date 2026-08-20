@@ -12,3 +12,10 @@ data/
 .mypy_cache/
 grafana/data/
 prometheus/data/
+.ruff_cache/
+
+# OAuth tokens and account registries for the MCP connectors, mounted into
+# the sidecar containers as volumes. These are live credentials - the Google
+# Workspace server refreshes and rewrites them in place.
+secrets/
+

@@ -1,0 +1,18 @@
+{
+  "tool": "manage_drive",
+  "arguments": {
+    "operation": "get",
+    "email": "demo@example.com",
+    "fileId": "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcde"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "## TEST\n\n**Type:** application/vnd.google-apps.document\n**Modified:** 2026-08-17T12:37:59.865Z\n**Size:** 2.2 KB\n**Link:** https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcde/edit?usp=drivesdk\n**Owner:** demo@example.com\n**Shared:** no\n\n---\n**Next steps:**\n- Download this file: `manage_drive` \u2014 `{\"operation\":\"download\",\"email\":\"demo@example.com\",\"fileId\":\"1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcde\"}`\n\n---\n**Session context** (demo@example.com):\n- No new unread emails since session start (2 unread, 2 today)\n- No more events today",
+      "annotations": null,
+      "meta": null
+    }
+  ]
+}

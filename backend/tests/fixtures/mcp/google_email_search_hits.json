@@ -1,0 +1,19 @@
+{
+  "tool": "manage_email",
+  "arguments": {
+    "operation": "search",
+    "email": "demo@example.com",
+    "query": "newer_than:30d",
+    "maxResults": 5
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "## Messages (2)\n\n18f0aaaa0000bbb1 | Gmail Team <mail-noreply@goog\u2026 | Tips for using your new inbox | Aug 17\n18f0aaaa0000bbb2 | Gmail Team <mail-noreply@goog\u2026 | Get the official Gmail app | Aug 17\n\n---\n**Next steps:**\n- Read a specific email: `manage_email` \u2014 `{\"operation\":\"read\",\"email\":\"demo@example.com\",\"messageId\":\"<id from results>\"}`\n- Narrow search: `manage_email` \u2014 `{\"operation\":\"search\",\"email\":\"demo@example.com\",\"query\":\"<refined query>\"}`\n\n---\n**Session context** (demo@example.com):\n- No new unread emails since session start (2 unread, 2 today)\n- No more events today",
+      "annotations": null,
+      "meta": null
+    }
+  ]
+}

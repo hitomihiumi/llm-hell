@@ -35,6 +35,7 @@ Run directly: `python mock_vllm.py` (defaults to 0.0.0.0:8000).
 """
 
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -46,7 +47,38 @@ from fastapi.responses import StreamingResponse
 app = FastAPI(title="mock-vllm")
 
 REASONING_TEXT = "Analyzing the request and considering the available context before answering."
-CONTENT_TEXT = "This is a mock completion used for local development against the LLM-Hell agent loop."
+# Deliberately Markdown, with citations. A real model answers in Markdown -
+# headings, lists, bold, code, sometimes a table - so a plain-text stand-in
+# cannot exercise the answer renderer at all, and the first time anyone points
+# this at a live pod the formatting would be the thing that broke. `[1]`/`[2]`
+# resolve against whatever hits were packed into the prompt; `[9]` is here on
+# purpose to prove an out-of-range citation stays inert text.
+CONTENT_TEXT = """Results are merged with **reciprocal rank fusion**, which deliberately ignores
+each backend's own relevance score [1].
+
+## Why the scores are not comparable
+
+- GitLab returns no score at all
+- Postgres returns whatever the generated `ORDER BY` produced
+- Drive returns Google's own opaque ordering [2]
+
+The only signal that means the same thing everywhere is *position within a
+source's own results*, so each hit contributes:
+
+```python
+score = source_weight / (60 + rank_within_source)
+```
+
+| Source | Excerpt | Lands on the match |
+| --- | --- | --- |
+| GitLab | Matched lines | Yes |
+| Postgres | Window around the match | Row, then passage |
+
+> A citation the model invents, like [9], stays plain text - it resolves to no
+> hit that was in the prompt.
+
+This is a mock completion used for local development against the LLM-Hell
+agent loop."""
 
 CANNED_PLAN = json.dumps(
     [
@@ -80,11 +112,152 @@ def _wants_json_protocol_tool_call(body: dict[str, Any]) -> bool:
     return any("```tool_call" in (m.get("content") or "") for m in body.get("messages", []))
 
 
+# --- text2sql -------------------------------------------------------------
+#
+# Without this the mock answers every prompt with prose, so `parse_generated`
+# rejects it and the Postgres source silently runs its deterministic
+# fallback - which searches only the first configured table. The seeded
+# corpus has four, so three of them were unreachable in the dev stack and
+# the UI could never show `mode: llm` at all. This is the one prompt in the
+# service whose reply has to be machine-readable, so it is the one the mock
+# has to actually understand.
+
+# Matches the system prompt in services/search/text2sql.py. Kept as a phrase
+# rather than a sentinel because it is the instruction itself: if that
+# wording is rewritten, this should stop matching and be updated with it.
+_SQL_MARKER = "ONE PostgreSQL SELECT statement"
+
+# Rendered by the connector as `table(col type, col type)`.
+_SCHEMA_LINE = re.compile(r"^(\w+)\(([^)]*)\)$", re.MULTILINE)
+
+# Which table a question is about. First hit wins, so the order is the
+# priority order; anything unmatched falls through to the first table.
+_TABLE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("tickets", ("error", "fail", "broken", "bug", "crash", "hang", "wrong", "ticket", "incident")),
+    ("runbooks", ("how do i", "steps", "runbook", "restart", "rotate", "recover", "bring up", "verify")),
+    ("decisions", ("decision", "why did we", "instead of", "rejected", "considered", "chose", "trade-off")),
+)
+
+_STOPWORDS = frozenset(
+    "the a an and or but how why what when does do is are was were of for to in on at "
+    "with from that this it its we our you your can could should would if then than".split()
+)
+
+_TIMESTAMPS = ("updated_at", "created_at", "decided_at", "occurred_at")
+_AUTHORS = ("author", "reporter", "owner", "decided_by")
+
+
+def _wants_sql(body: dict[str, Any]) -> bool:
+    return any(_SQL_MARKER in (m.get("content") or "") for m in body.get("messages", []))
+
+
+def _schema_from_prompt(body: dict[str, Any]) -> dict[str, list[str]]:
+    system = "\n".join(m.get("content") or "" for m in body.get("messages", []) if m.get("role") == "system")
+    return {
+        match.group(1): [column.strip().split(" ")[0] for column in match.group(2).split(",") if column.strip()]
+        for match in _SCHEMA_LINE.finditer(system)
+    }
+
+
+def _terms(question: str) -> list[str]:
+    """The words worth matching on.
+
+    A real model extracts keywords; searching for the whole question as one
+    ILIKE pattern matches nothing, which would make the mock look like it
+    works while returning an empty table every time.
+    """
+    words = [word for word in re.findall(r"[A-Za-z0-9_.-]{3,}", question.lower()) if word not in _STOPWORDS]
+    # Longest first: the specific word in a question carries it.
+    return sorted(dict.fromkeys(words), key=len, reverse=True)[:3] or [question.strip()[:40]]
+
+
+def _sql_response(body: dict[str, Any]) -> str:
+    schema = _schema_from_prompt(body)
+    question = next(
+        (m.get("content") or "" for m in reversed(body.get("messages", [])) if m.get("role") == "user"),
+        "",
+    )
+
+    tables = list(schema) or ["articles"]
+    lowered = question.lower()
+    table = next(
+        (name for name, hints in _TABLE_HINTS if name in tables and any(h in lowered for h in hints)),
+        tables[0],
+    )
+
+    columns = schema.get(table, ["id", "title", "body"])
+    timestamp = next((c for c in _TIMESTAMPS if c in columns), None)
+    author = next((c for c in _AUTHORS if c in columns), None)
+    snippet = "body" if "body" in columns else columns[-1]
+
+    matched = ["title", snippet] if "title" in columns else [snippet]
+    where = " OR ".join(
+        f"{column} ILIKE '%{term.replace(chr(39), chr(39) * 2)}%'" for term in _terms(question) for column in matched
+    )
+
+    selected = ["id", "title", snippet] if "title" in columns else ["id", snippet]
+    selected += [column for column in (timestamp, author) if column]
+    order = f" ORDER BY {timestamp} DESC" if timestamp else ""
+
+    return json.dumps(
+        {
+            "sql": f"SELECT {', '.join(dict.fromkeys(selected))} FROM {table} WHERE {where}{order} LIMIT 10",
+            "table": table,
+            "id_column": "id",
+            "title_column": "title" if "title" in columns else snippet,
+            "snippet_column": snippet,
+            "timestamp_column": timestamp,
+            "author_column": author,
+        }
+    )
+
+
+# --- vision ---------------------------------------------------------------
+#
+# Stands in for the Qwen3-VL endpoint. Without this there is no way to test
+# the PDF path end to end without a second GPU: the code that renders pages,
+# calls a model and merges the result into the document is the part most
+# likely to be wrong, and it is unreachable if nothing answers an image.
+#
+# The reply deliberately contains facts that exist ONLY in a diagram - pad
+# names and a wiring order - so a test can prove the transcription reached the
+# answer prompt rather than merely being computed and dropped.
+
+VISION_TEXT = """\
+Board top view, pad and connector layout.
+
+UART pads, left edge, top to bottom: T1/R1, T2/R2, T3/R3, T4/R4, T6/R6.
+UART3 (T3/R3) is the pad pair nearest the USB connector and is labelled
+"GPS" in silkscreen.
+
+Power: 5V and GND pads either side of the BEC block, marked 5V 2A.
+The battery input pads are BAT+ and BAT-, bottom right, rated 3-6S.
+
+Motor outputs S1-S4 run along the right edge, each with an adjacent GND.
+A jumper marked JP1 selects between 5V and 9V on the VTX pad."""
+
+
+def _wants_vision(body: dict[str, Any]) -> bool:
+    """An OpenAI multimodal request: some message's content is a list with an
+    image part in it, rather than a plain string."""
+    for message in body.get("messages", []):
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(part, dict) and part.get("type") == "image_url" for part in content
+        ):
+            return True
+    return False
+
+
 def _pick_content_text(body: dict[str, Any]) -> str:
     if _wants_plan(body):
         return PLAN_RESPONSE_TEXT
     if _wants_json_protocol_tool_call(body):
         return TOOL_CALL_RESPONSE_TEXT
+    if _wants_vision(body):
+        return VISION_TEXT
+    if _wants_sql(body):
+        return _sql_response(body)
     return CONTENT_TEXT
 
 

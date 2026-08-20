@@ -1,0 +1,17 @@
+{
+  "tool": "execute_sql",
+  "arguments": {
+    "sql": "SELECT json_agg(t)::text AS payload FROM (SELECT id, title, author, updated_at FROM articles WHERE body ILIKE '%search%' LIMIT 3) t"
+  },
+  "is_error": false,
+  "structured_content": null,
+  "content_blocks": [
+    {
+      "type": "text",
+      "text": "[{'payload': '[{\"id\":5,\"title\":\"Why generated SQL runs as a read-only role\",\"author\":\"dmytro\",\"updated_at\":\"2026-08-15T07:59:28.139408+00:00\"}]'}]",
+      "annotations": null,
+      "meta": null
+    }
+  ],
+  "text_as_json": null
+}

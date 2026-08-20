@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
@@ -37,7 +37,7 @@ async def _seed_user_with_key(db, *, role: str = "user", active: bool = True, re
         name="test-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=prefix,
-        revoked_at=datetime.now(timezone.utc) if revoked else None,
+        revoked_at=datetime.now(UTC) if revoked else None,
     )
     db.add(api_key)
     await db.commit()
