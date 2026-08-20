@@ -1,32 +1,60 @@
 # Knowledge Base — VS Code extension
 
-Federated search over Google Workspace, GitLab and the internal knowledge
-base, without leaving the editor. Answers come back cited, and a result opens
-as a real document rather than a card.
+`@kb` in the chat panel. Ask across Google Workspace, GitLab and the internal
+knowledge base; the answer streams in with the results it read attached, and a
+follow-up knows what you were talking about.
+
+```
+@kb які розміри у t motor u7?
+@kb а вага?
+```
 
 It is a thin client on purpose. The backend already plans the queries, fuses
-the sources and writes the answer; nothing here re-implements any of that.
-What the editor adds is the part a browser is bad at: searching for what is
-already under the cursor, and reading a code hit with syntax highlighting,
-find, and copy that produces the file.
+the sources and writes the cited answer; nothing here re-implements any of
+that. The editor supplies the two things the web app cannot: a conversation
+for the query planner to read, and a real document to open a code hit into.
 
 ---
 
-## What it does
+## Why a chat participant and not a panel
+
+The backend plans a search **from the transcript**. Asked "чи присутній тут
+гіроскоп" it finds nothing on its own — `тут` lives in the previous turn, and
+the datasheet says `IMU: MPU6000`, not "гіроскоп". Given the turn that named
+the board, the planner rewrites it as `F722 IMU`, `F722 gyro`, `F722 MPU6000`
+and the answer comes back correct.
+
+A sidebar has no conversation to hand it. A chat does, and the editor already
+owns the transcript, the follow-up buttons, cancellation and the reference UI.
+So `@kb` is a pipe between the two:
+
+| the panel | the backend |
+| --- | --- |
+| transcript | `history`, which the planner reads |
+| references | the hits, listed the way Copilot lists the files it opened |
+| streamed Markdown | `token` events, straight through |
+| `[1]` links | citations, resolved against the results that were really in the prompt |
+
+Results appear about a second in and the answer is written underneath them,
+because the server sends them in that order and nothing here buffers.
+
+`/find` runs the same search with the model left out: the list, fast, nothing
+billed.
+
+---
+
+## Also there
 
 | | |
 | --- | --- |
-| **Search** (`Knowledge Base: Search`) | A box, pre-filled with the selection or the symbol under the cursor. |
-| **Search for Selection** (`Ctrl+Alt+K`) | Skips the box. Select `RRF_K`, press the key, read the answer. |
-| **Results** | A sidebar grouped by source, with each source's timing and — when it failed — why. |
-| **Open a result** | A read-only editor tab. Code hits get their language, spreadsheets keep their rows. |
-| **Answer** | A Markdown tab whose `[1]` citations are links to the results they came from. |
-| **Choose Sources** | A checklist, remembered per window, so one project can search GitLab only. |
+| `Ctrl+Alt+K` | opens the chat carrying the editor selection |
+| `Ctrl+Alt+Shift+K` | opens the chat empty |
+| **Knowledge Base** sidebar | every result the chat found, still browsable after the answer has scrolled away |
+| Clicking a result | a read-only editor tab — a code hit arrives with its language, so find and go-to-line work |
+| **Choose Sources** | a checklist, remembered per window, so one project can search GitLab only |
 
-Results are grouped by source rather than shown in fused rank, which is the
-opposite of what the web app does. A sidebar is narrow: knowing *where* a
-result lives is what tells you whether to open it. The fused rank survives
-inside each group.
+The sidebar is a companion, not the interface. It exists because a transcript
+scrolls and results should not have to be found again three turns later.
 
 ---
 
@@ -44,8 +72,7 @@ Point it at the **backend**, not the web app:
 ```jsonc
 {
   "knowledgeBase.baseUrl": "http://localhost:8000",  // not :3001
-  "knowledgeBase.limit": 20,
-  "knowledgeBase.answer": true
+  "knowledgeBase.limit": 20
 }
 ```
 
@@ -54,12 +81,10 @@ secret storage — the OS keychain — and never into a settings file. The
 username is written to settings only after the credentials are known to work,
 so a typo does not become the saved username.
 
-The panel then switches from offering to sign in to offering to search, and
-stays that way across restarts: a session lives in memory and a reopened
-editor has none, but the credential that establishes one is still in the
-keychain, so the panel opens in the state it was left in. Searching while
-signed out puts up a toast with a **Sign In** button, and pressing it runs the
-search that was asked for rather than leaving you to ask again.
+The state survives a restart: a session lives in memory and a reopened editor
+has none, but the credential that establishes one is still in the keychain, so
+the first request signs in without asking. Asking while signed out puts a
+**Sign in** button in the chat turn.
 
 ### Why a password and not an API key
 
@@ -72,11 +97,8 @@ backend to grow a third way in. **No server change is needed to run it.**
 That costs two things a browser would do by itself, and `src/http.ts` does
 both: cookies are kept by hand, because `fetch` in the extension host has no
 jar, and the CSRF token is echoed back in a header, because the API's
-double-submit check requires it on anything that is not a GET.
-
-Sessions last a week. When one expires the client signs in again and retries
-the request once, so an editor left open over a weekend does not answer a
-search with "not authenticated".
+double-submit check requires it on anything that is not a GET. An expired
+session is renewed and the request retried once.
 
 ---
 
@@ -88,8 +110,12 @@ search with "not authenticated".
 | `knowledgeBase.username` | — | Filled in by **Sign In**. |
 | `knowledgeBase.sources` | `[]` | Source keys to search. Empty means every enabled source. |
 | `knowledgeBase.limit` | `20` | Results per search, across all sources. |
-| `knowledgeBase.answer` | `true` | Off makes a search fast and costs no tokens. |
+| `knowledgeBase.answer` | `true` | Applies to the sidebar search; in chat, use `/find`. |
 | `knowledgeBase.searchOnSelection` | `true` | Pre-fill from the editor. |
+
+Needs VS Code 1.100 or newer for the chat API. Without a chat panel the
+participant is simply not registered — the sidebar, the commands and the
+keybindings still work, and `Ctrl+Alt+K` falls back to the search box.
 
 ---
 
@@ -102,17 +128,18 @@ pnpm lint        # biome
 pnpm build       # esbuild bundle into dist/
 ```
 
-The layering exists so the tests can run at all. `format.ts`, `http.ts` and
-`client.ts` import nothing from `vscode`, so `node --test` loads them
-directly — `client.ts` is driven against a stub HTTP server that enforces what
-the real API enforces, which is how the cookie and CSRF handling is checked
-without an extension host. `documents.ts`, `resultsView.ts` and
-`extension.ts` do need the editor's API and are exercised by running it.
+The layering exists so the tests can run at all. `format.ts`, `http.ts`,
+`sse.ts` and `client.ts` import nothing from `vscode`, so `node --test` loads
+them directly — 49 tests, including the client driven against a stub server
+that enforces the same cookie and CSRF rules as the real API, and the SSE
+parser fed on chunk boundaries that fall in the wrong places. `chat.ts`,
+`documents.ts`, `resultsView.ts` and `extension.ts` do need the editor's API
+and are exercised by running it.
 
-Two consequences of that, both deliberate: those three files declare and
-assign their fields rather than using constructor parameter properties, and
+Two consequences of that split, both deliberate: the vscode-free files declare
+and assign their fields instead of using constructor parameter properties, and
 they import each other with an explicit `.ts`. Node strips types rather than
-compiling them, and it rejects both shortcuts.
+compiling them and rejects both shortcuts.
 
 `src/types.ts` mirrors `backend/app/schemas/search.py` by hand, and carries
 only the fields this extension reads: a backend that grows a field cannot

@@ -2,7 +2,8 @@
 // ES module, where an extensionless specifier does not resolve. The bundler
 // is happy either way; the test runner is not.
 import { parseCookies, readSetCookie, withScheme } from "./http.ts";
-import type { Content, SearchHit, SearchResponse, Source } from "./types";
+import { type ServerEvent, SseParser } from "./sse.ts";
+import type { ChatTurn, Content, SearchHit, SearchResponse, Source } from "./types";
 
 /**
  * The HTTP side of the extension.
@@ -41,6 +42,11 @@ const PASSWORD_KEY = "knowledgeBase.password";
 interface Credentials {
   username: string;
   password: string;
+}
+
+interface RequestOptions {
+  accept?: string;
+  signal?: AbortSignal;
 }
 
 /**
@@ -119,6 +125,62 @@ export class KnowledgeBaseClient {
     });
   }
 
+  /**
+   * A search as it happens: results first, then the answer a token at a time.
+   *
+   * The order is the point. The server emits `hits` about a second in, while
+   * the model is still writing, so a chat can show what it found and then
+   * type the answer underneath instead of sitting on a spinner until both are
+   * done.
+   *
+   * Events are yielded as they arrive. `signal` aborts the request, which is
+   * what a cancelled chat turn needs.
+   */
+  async *searchStream(
+    query: string,
+    options: { sources?: string[]; limit?: number; answer?: boolean; history?: ChatTurn[] },
+    signal?: AbortSignal,
+  ): AsyncGenerator<ServerEvent> {
+    const response = await this.authorised(
+      "POST",
+      "/api/search/stream",
+      {
+        query,
+        sources: options.sources?.length ? options.sources : null,
+        limit: options.limit ?? null,
+        answer: options.answer ?? true,
+        history: options.history?.length ? options.history : null,
+      },
+      { accept: "text/event-stream", signal },
+    );
+
+    const body = response.body;
+    if (!body) {
+      throw new ApiError("The server sent no stream to read.", response.status);
+    }
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const parser = new SseParser();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const event of parser.push(decoder.decode(value, { stream: true }))) {
+          yield event;
+        }
+      }
+      for (const event of parser.flush()) {
+        yield event;
+      }
+    } finally {
+      // Releasing matters on an early return - a generator abandoned partway
+      // through would otherwise hold the socket until it was collected.
+      reader.releaseLock();
+      if (!signal?.aborted) await body.cancel().catch(() => undefined);
+    }
+  }
+
   async content(hit: SearchHit): Promise<Content> {
     // The id carries a colon (`google_drive:1AbC…`) and the route matches it
     // as a path, so each segment is encoded but the separators are kept.
@@ -145,16 +207,21 @@ export class KnowledgeBaseClient {
    * open across a weekend should not answer a search with "not authenticated"
    * when it has the credentials to fix that itself.
    */
-  private async authorised(method: string, path: string, body?: unknown): Promise<Response> {
+  private async authorised(
+    method: string,
+    path: string,
+    body?: unknown,
+    options: RequestOptions = {},
+  ): Promise<Response> {
     if (!this.signedIn) {
       await this.loginFromStorage();
     }
 
-    let response = await this.send(method, path, body);
+    let response = await this.send(method, path, body, options);
     if (response.status === 401) {
       this.cookies.clear();
       await this.loginFromStorage();
-      response = await this.send(method, path, body);
+      response = await this.send(method, path, body, options);
     }
 
     if (response.status === 401 || response.status === 403) {
@@ -192,9 +259,14 @@ export class KnowledgeBaseClient {
     }
   }
 
-  private async send(method: string, path: string, body?: unknown): Promise<Response> {
+  private async send(
+    method: string,
+    path: string,
+    body?: unknown,
+    options: RequestOptions = {},
+  ): Promise<Response> {
     const { baseUrl } = this.settings();
-    const headers: Record<string, string> = { accept: "application/json" };
+    const headers: Record<string, string> = { accept: options.accept ?? "application/json" };
 
     const cookie = this.cookieHeader();
     if (cookie) {
@@ -216,8 +288,12 @@ export class KnowledgeBaseClient {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: options.signal,
       });
     } catch (error) {
+      // An abort is the caller's own doing and must not be dressed up as the
+      // backend being unreachable.
+      if (options.signal?.aborted) throw error;
       // A refused connection is the single most common failure here and the
       // stack trace says nothing a user can act on.
       throw new ApiError(`Could not reach ${baseUrl}: ${(error as Error).message}`, 0);

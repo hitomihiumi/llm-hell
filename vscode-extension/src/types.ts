@@ -82,3 +82,9 @@ export interface Source {
   enabled: boolean;
   weight: number;
 }
+
+/** One prior exchange, as `/api/search` and `/api/search/stream` want it. */
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}

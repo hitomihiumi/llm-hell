@@ -1,4 +1,4 @@
-import type { Answer, SearchHit, SearchResponse } from "./types";
+import type { Answer, ChatTurn, SearchHit, SearchResponse } from "./types";
 
 /**
  * Turning API payloads into text.
@@ -45,12 +45,7 @@ export function answerMarkdown(response: SearchResponse): string {
   lines.push(linkCitations(answer.text, answer.citations), "");
 
   if (answer.citations.length) {
-    lines.push("## Sources", "");
-    for (const citation of answer.citations) {
-      const label = `${citation.title} — \`${citation.source}\``;
-      lines.push(`${citation.n}. ${citation.url ? `[${label}](${citation.url})` : label}`);
-    }
-    lines.push("");
+    lines.push("## Sources", "", ...citationLinks(answer.citations), "");
   }
 
   lines.push("---", "", summarise(response, answer), "");
@@ -62,6 +57,21 @@ export function linkCitations(text: string, citations: Answer["citations"]): str
   return text.replace(/\[(\d+)\]/g, (whole, digits) => {
     const citation = byNumber.get(Number(digits));
     return citation?.url ? `[${whole}](${citation.url})` : whole;
+  });
+}
+
+/**
+ * The numbered source list, one Markdown line each.
+ *
+ * Shared between the answer document and the chat panel so a citation reads
+ * the same in both. A result with no permalink - a knowledge-base row - is
+ * still listed, as text: dropping it would leave a gap in the numbering, and
+ * a number with nothing beside it is worse than a line that cannot be clicked.
+ */
+export function citationLinks(citations: Answer["citations"]): string[] {
+  return citations.map((citation) => {
+    const label = `${citation.title} — \`${citation.source}\``;
+    return `${citation.n}. ${citation.url ? `[${label}](${citation.url})` : label}`;
   });
 }
 
@@ -85,4 +95,58 @@ function summarise(response: SearchResponse, answer: Answer): string {
 export function collapse(text: string): string {
   const single = text.replace(/\s+/g, " ").trim();
   return single.length > 2000 ? single.slice(0, 2000) : single;
+}
+
+// --- the chat transcript -------------------------------------------------------
+
+/** How much of the transcript to carry. The API caps history at 20 turns. */
+export const MAX_HISTORY_TURNS = 10;
+const MAX_TURN_CHARS = 8000;
+
+/**
+ * A turn of the chat panel's transcript, described by what is read from it
+ * rather than by importing the editor's classes - which is what lets this file
+ * stay free of `vscode` and therefore testable.
+ */
+export interface TranscriptTurn {
+  /** Present on a request turn: what the user typed. */
+  readonly prompt?: string;
+  /** Present on a response turn: the parts the participant streamed back. */
+  readonly response?: ReadonlyArray<unknown>;
+}
+
+/**
+ * The transcript, as the query planner wants it.
+ *
+ * This is what makes a follow-up work at all. The planner resolves "тут" and
+ * "it" against the conversation and rewrites the search in the vocabulary the
+ * documents use; given no history it searches for the words as typed, which
+ * for a follow-up is close to searching for nothing.
+ */
+export function historyFor(history: readonly TranscriptTurn[]): ChatTurn[] {
+  const turns: ChatTurn[] = [];
+  for (const turn of history.slice(-MAX_HISTORY_TURNS)) {
+    if (typeof turn.prompt === "string") {
+      const prompt = turn.prompt.trim();
+      if (prompt) turns.push({ role: "user", content: prompt.slice(0, MAX_TURN_CHARS) });
+      continue;
+    }
+    // Only the prose. A response also carries references, anchors and
+    // buttons, and none of those is something the model said.
+    const text = (turn.response ?? []).map(markdownOf).join("").trim();
+    if (text) turns.push({ role: "assistant", content: text.slice(0, MAX_TURN_CHARS) });
+  }
+  return turns;
+}
+
+/**
+ * The text of a Markdown part, or "" for any other part.
+ *
+ * Checked by shape rather than by name: an anchor part also has a `value`,
+ * and it holds a Uri. Asking whether that value has a string `value` of its
+ * own is what separates the two.
+ */
+function markdownOf(part: unknown): string {
+  const value = (part as { value?: { value?: unknown } } | null)?.value;
+  return typeof value?.value === "string" ? value.value : "";
 }

@@ -7,9 +7,11 @@
   "publisher": "llmhell",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.100.0"
   },
   "categories": [
+    "AI",
+    "Chat",
     "Other"
   ],
   "main": "./dist/extension.js",
@@ -82,10 +84,16 @@
       {
         "view": "knowledgeBase.results",
         "when": "knowledgeBase.signedIn",
-        "contents": "Nothing searched yet.\n[Search](command:knowledgeBase.search)\n\nOr select something in the editor and press Ctrl+Alt+K.\n[Choose sources](command:knowledgeBase.chooseSources)"
+        "contents": "Ask in the chat panel with **@kb**, and the results land here.\n[Open chat](command:knowledgeBase.openChat)\n\nOr search without a conversation:\n[Search](command:knowledgeBase.search)"
       }
     ],
     "commands": [
+      {
+        "command": "knowledgeBase.openChat",
+        "title": "Ask in Chat",
+        "category": "Knowledge Base",
+        "icon": "$(comment-discussion)"
+      },
       {
         "command": "knowledgeBase.search",
         "title": "Search",
@@ -139,6 +147,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "knowledgeBase.openChat",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@0"
+        },
         {
           "command": "knowledgeBase.search",
           "when": "view == knowledgeBase.results",
@@ -195,6 +208,26 @@
         "key": "ctrl+alt+k",
         "mac": "cmd+alt+k",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "knowledgeBase.openChat",
+        "key": "ctrl+alt+shift+k",
+        "mac": "cmd+alt+shift+k"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "knowledgeBase.chat",
+        "name": "kb",
+        "fullName": "Knowledge Base",
+        "description": "Ask across Google Workspace, GitLab and the knowledge base",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "find",
+            "description": "Results only - no answer, no tokens spent"
+          }
+        ]
       }
     ]
   },
@@ -210,7 +243,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.2",
     "@types/node": "^20",
-    "@types/vscode": "^1.90.0",
+    "@types/vscode": "^1.100.0",
     "esbuild": "^0.25.0",
     "typescript": "^5"
   },

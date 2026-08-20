@@ -277,9 +277,12 @@ pnpm test         # no extension host needed - see its README for why
 pnpm build && code --extensionDevelopmentPath=.
 ```
 
-The editor client searches the same `/api/*` the web app does, signing in with
-a cookie session rather than a bearer key, so it needs no change on the
-backend. See `vscode-extension/README.md`.
+`@kb` in the editor's chat panel searches the same `/api/*` the web app does,
+signing in with a cookie session rather than a bearer key, so it needs no
+change on the backend. It streams `/api/search/stream`, which is what lets the
+results appear before the answer is written, and hands the panel's transcript
+to the query planner - which is the whole reason it is a chat participant and
+not another search box. See `vscode-extension/README.md`.
 
 Tests use in-memory SQLite, so **no Postgres-only column types** may appear
 in `app/models/` — no `JSONB`, `ARRAY`, `UUID`, `TSVECTOR`. The first one
@@ -317,7 +320,9 @@ docker/
   google-mcp/          the stdio->HTTP bridged Google server
   postgres/initdb/     kb database, kb_ro role, demo corpus
 vscode-extension/
-  src/format.ts        answer document, file names - pure, so node --test runs it
+  src/chat.ts          the @kb chat participant: transcript in, streamed answer out
+  src/sse.ts           the event-stream parser - pure, so node --test runs it
+  src/format.ts        answer document, citation links, history mapping - pure
   src/http.ts          cookies and base URLs - pure, same reason
   src/client.ts        signs in the way the web app does; no server change needed
 tools/mcp_probe.py     standalone MCP prober

@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { registerChatParticipant } from "./chat";
 import { ApiError, AuthError, KnowledgeBaseClient } from "./client";
 import { answerUri, applyLanguage, hitUri, KnowledgeBaseDocuments, SCHEME } from "./documents";
 import { answerMarkdown, collapse } from "./format";
@@ -58,9 +59,30 @@ export function activate(context: vscode.ExtensionContext): void {
   // state the user left it in.
   void client.hasCredentials().then(setSignedIn);
 
+  const chat = registerChat(context, client, results, view);
+  const hasChat = chat.length > 0;
+
+  /** Put a question in the chat box, addressed to the participant. */
+  async function askInChat(question: string): Promise<void> {
+    await vscode.commands.executeCommand("workbench.action.chat.open", {
+      // A trailing space leaves the caret after the mention rather than
+      // inside it, so typing continues the question.
+      query: question ? `@kb ${question}` : "@kb ",
+    });
+  }
+
   context.subscriptions.push(
     view,
     vscode.workspace.registerTextDocumentContentProvider(SCHEME, documents),
+
+    // `@kb` in the chat panel, which is the interface this is really for: the
+    // backend plans a search from the conversation, and only a chat has one.
+    // Registration is guarded because the chat API is absent in editors built
+    // without it, and an extension that fails to activate takes its sidebar
+    // down with it.
+    ...chat,
+
+    vscode.commands.registerCommand("knowledgeBase.openChat", () => askInChat("")),
 
     vscode.commands.registerCommand("knowledgeBase.signIn", authenticate),
 
@@ -77,10 +99,15 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand("knowledgeBase.searchSelection", async () => {
-      // The selection is the query, not a suggestion: this command exists to
-      // skip the box. An empty selection still asks, rather than searching
-      // for nothing.
+      // Straight into the chat, carrying the selection. That is where a
+      // question belongs - the answer can be followed up, and the follow-up
+      // is planned with this turn in view. The box is the fallback for an
+      // editor with no chat panel to open.
       const selected = prefill(true);
+      if (hasChat) {
+        await askInChat(selected);
+        return;
+      }
       if (selected) await run(selected);
       else {
         const query = await ask("");
@@ -172,6 +199,45 @@ export function activate(context: vscode.ExtensionContext): void {
         `Searched without ${failed.map((status) => status.display_name || status.source).join(", ")}.`,
       );
     }
+  }
+}
+
+/**
+ * The chat participant, plus the wiring that keeps the sidebar in step.
+ *
+ * Returns nothing when the editor has no chat API rather than throwing: this
+ * runs during activation, and an extension that fails there loses its
+ * commands and its view as well as the chat it could not have had anyway.
+ */
+function registerChat(
+  context: vscode.ExtensionContext,
+  client: KnowledgeBaseClient,
+  results: ResultsProvider,
+  view: vscode.TreeView<unknown>,
+): vscode.Disposable[] {
+  if (!vscode.chat?.createChatParticipant) {
+    return [];
+  }
+  try {
+    const participant = registerChatParticipant(context, client, () => {
+      const settings = readSettings();
+      return {
+        sources: context.workspaceState.get<string[]>(SOURCES_KEY) ?? settings.sources,
+        limit: settings.limit,
+        onResults: (response: SearchResponse) => {
+          // Everything the chat found also lands in the sidebar, so the
+          // results stay browsable after the answer has scrolled away.
+          results.show(response);
+          view.title = `Results · ${response.hits.length}`;
+        },
+      };
+    });
+    return [participant];
+  } catch (error) {
+    // A duplicate id or a manifest the editor did not accept. Worth a line in
+    // the log; not worth taking the rest of the extension down.
+    console.warn("knowledge base: chat participant not registered", error);
+    return [];
   }
 }
 
