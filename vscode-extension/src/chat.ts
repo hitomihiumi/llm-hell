@@ -98,7 +98,14 @@ export function registerChatParticipant(
               showReferences(stream, hits);
               reportSources(stream, statuses);
               if (!hits.length) {
-                stream.markdown("\nNothing matched.\n");
+                // Distinguished because they call for different next moves: a
+                // corpus that holds nothing on the subject is a fact, and every
+                // source having fallen over is a thing to fix.
+                stream.markdown(
+                  statuses.some((status) => status.ok)
+                    ? "\nNothing matched.\n"
+                    : "\nNo source answered, so nothing was searched.\n",
+                );
               } else if (wantsAnswer) {
                 stream.progress("Reading the results…");
               }
@@ -188,12 +195,26 @@ function showReferences(stream: vscode.ChatResponseStream, hits: SearchHit[]): v
   }
 }
 
-/** A source that failed is said out loud; one that worked is not worth a line. */
+/**
+ * A source that failed is said out loud, **with its reason**.
+ *
+ * The name alone is not enough, and that was learned the hard way: a turn
+ * that said only "Searched without Google Drive" above "Nothing matched" gave
+ * nothing to act on, while the reason — the source had run out of its
+ * wall-clock budget — was sitting unread in the payload. A source that worked
+ * is not worth a line.
+ */
 function reportSources(stream: vscode.ChatResponseStream, statuses: SourceStatus[]): void {
-  const failed = statuses.filter((status) => !status.ok);
-  if (!failed.length) return;
-  const names = failed.map((status) => `**${status.display_name || status.source}**`).join(", ");
-  stream.markdown(`\n_Searched without ${names}._\n\n`);
+  for (const status of statuses) {
+    const name = status.display_name || status.source;
+    if (!status.ok) {
+      stream.markdown(
+        `\n_Searched without **${name}**${status.error ? `: ${status.error}` : "."}_\n\n`,
+      );
+    } else if (status.degraded) {
+      stream.markdown(`\n_Some of **${name}**'s results are missing._\n\n`);
+    }
+  }
 }
 
 /**

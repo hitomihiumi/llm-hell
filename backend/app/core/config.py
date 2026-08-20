@@ -71,8 +71,21 @@ class Settings(BaseSettings):
 
     # --- Search federation ------------------------------------------------
     # Wall clock for one source's entire search(), which may span several
-    # tool calls. Must exceed mcp_call_timeout_seconds.
-    search_timeout_seconds: float = 20.0
+    # tool calls.
+    #
+    # **Must exceed mcp_call_timeout_seconds**, and for a long time did not:
+    # 20 against a 25-second call timeout meant a single slow call could never
+    # fail on its own terms. The source was cut first, and cut whole - one
+    # unlucky Drive request took the entire result list with it and the answer
+    # read "there is no Gantt chart in the search results" about a spreadsheet
+    # sitting in the account.
+    #
+    # 30 is not arbitrary either. Drive's search runs once per planned
+    # phrasing, each enriching its top hits, and measured against a live
+    # account that comes to 11-17 seconds with the per-request cache in place
+    # and occasionally more. A budget has to clear the slow end of the real
+    # distribution, not the median.
+    search_timeout_seconds: float = 30.0
     search_per_source_limit: int = 10
     search_total_limit: int = 40
     # Reciprocal-rank-fusion constant. 60 is the value from the original RRF

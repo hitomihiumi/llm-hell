@@ -51,6 +51,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 import httpx
@@ -1015,12 +1016,22 @@ class GoogleWorkspaceConnector:
             # is to download the file and parse it here.
             type_hint = self._type_hints.get(hit.external_id)
             if is_pdf(type_hint):
-                text = await self._read_pdf(hit.external_id, type_hint=type_hint, ctx=ctx, transcribe=False)
+                text = await self._cached(
+                    ctx,
+                    f"pdf:{hit.external_id}",
+                    partial(
+                        self._read_pdf,
+                        hit.external_id,
+                        type_hint=type_hint,
+                        ctx=ctx,
+                        transcribe=False,
+                    ),
+                )
                 self._schedule_transcription(hit.external_id, ctx=ctx)
                 # How many pictures the UI may ask for. Counted here because
                 # the file is already open; the alternative is the browser
                 # firing a request per card to find out.
-                pages = await self.page_images(hit.id)
+                pages = await self._cached(ctx, f"pages:{hit.id}", partial(self.page_images, hit.id))
                 hit.preview_pages = len(pages) or None
                 if text:
                     # A wider window than the other surfaces get. A PDF's
@@ -1037,7 +1048,7 @@ class GoogleWorkspaceConnector:
                 # is the preview. Counting it here lets the result card show
                 # a thumbnail and the viewer open it without a 404.
                 try:
-                    pages = await self.page_images(hit.id)
+                    pages = await self._cached(ctx, f"pages:{hit.id}", partial(self.page_images, hit.id))
                     hit.preview_pages = len(pages) or None
                 except Exception as exc:  # noqa: BLE001 - a preview is a bonus
                     logger.info("could not preview image %s: %s", hit.external_id, summarise_exception(exc))
@@ -1049,7 +1060,7 @@ class GoogleWorkspaceConnector:
                 # downloaded; export to PDF and render pages for the preview.
                 # Google Docs also get their text body through manage_docs.
                 try:
-                    pages = await self.page_images(hit.id)
+                    pages = await self._cached(ctx, f"pages:{hit.id}", partial(self.page_images, hit.id))
                     hit.preview_pages = len(pages) or None
                 except Exception as exc:  # noqa: BLE001 - a preview is a bonus
                     logger.info("could not preview workspace file %s: %s", hit.external_id, summarise_exception(exc))
@@ -1057,11 +1068,11 @@ class GoogleWorkspaceConnector:
                 body: str | None = None
                 if is_google_doc(type_hint):
                     try:
-                        raw = await self._call(
-                            "manage_docs",
-                            {"email": self._account, "operation": "get", "documentId": hit.external_id},
+                        body = await self._cached(
+                            ctx,
+                            f"doc:{hit.external_id}",
+                            partial(self._read_doc_body, hit.external_id),
                         )
-                        body = extract_report_body(raw.text)
                     except Exception as exc:  # noqa: BLE001
                         logger.info("could not read doc %s: %s", hit.external_id, summarise_exception(exc))
 
@@ -1073,7 +1084,7 @@ class GoogleWorkspaceConnector:
                     # be windowed like prose: the rows that give a cell its
                     # meaning are the header band and the legend, which are
                     # never next to the row that matched. See services/sheets.
-                    reports = await self._read_sheet_tabs(hit.external_id)
+                    reports = await self._read_sheet_tabs(hit.external_id, ctx=ctx)
                     if reports:
                         hit.snippet = sheets.excerpt_tabs(reports, query, self._settings.answer_sheet_chars)
                         if hit.snippet:
@@ -1334,6 +1345,11 @@ class GoogleWorkspaceConnector:
             return None
         return await self._export_file(file_id, mime_type)
 
+    async def _read_doc_body(self, file_id: str) -> str:
+        """A Google Doc's text, through manage_docs."""
+        raw = await self._call("manage_docs", {"email": self._account, "operation": "get", "documentId": file_id})
+        return extract_report_body(raw.text)
+
     async def _read_sheet_text(self, file_id: str, tab: str | None = None) -> str | None:
         """Read a bounded range from a Google Sheet via manage_sheets.
 
@@ -1359,7 +1375,29 @@ class GoogleWorkspaceConnector:
             return None
         return raw.text
 
-    async def _read_sheet_tabs(self, file_id: str) -> list[str]:
+    async def _cached(self, ctx: SearchContext | None, key: str, produce):
+        """Whatever `produce` returns, computed at most once per request.
+
+        Enrichment is the expensive half of a Drive search - a PDF is
+        downloaded and parsed, a Doc is fetched, a workbook's tabs are read -
+        and a search runs four phrasings of the question, each of which
+        enriches its own top hits. The same document therefore came back from
+        Google up to four times per request, for the same bytes.
+
+        Keyed on the context rather than on the connector, because the
+        registry keeps one connector for the life of the process: a cache
+        there would still be serving a document that had been edited an hour
+        ago.
+        """
+        if ctx is None:
+            return await produce()
+        if key in ctx.cache:
+            return ctx.cache[key]
+        value = await produce()
+        ctx.cache[key] = value
+        return value
+
+    async def _read_sheet_tabs(self, file_id: str, *, ctx: SearchContext | None = None) -> list[str]:
         """Every tab of a workbook, as manage_sheets reports.
 
         A range read with no sheet name silently returns the FIRST tab, and
@@ -1373,8 +1411,22 @@ class GoogleWorkspaceConnector:
         workbook with thirty of them is not a document anybody is citing.
         Falls back to the default read whenever the tab list cannot be had,
         so this can only ever add sheets, never lose the one we already had.
+
+        Read once per request, and its tabs read at the same time. Both are
+        about the budget rather than tidiness: a search runs several
+        phrasings concurrently and they land on the same spreadsheet, so
+        without the cache one workbook was read four times over, and without
+        the fan-out its tabs were read one after another. That took the Drive
+        source to 17.5 seconds against a 20-second limit, and a source over
+        its limit is dropped entirely - the question came back "nothing
+        matched" about a document that was sitting right there.
         """
         limit = max(1, self._settings.google_sheet_tabs)
+        key = f"sheet:{file_id}"
+        if ctx is not None:
+            cached = ctx.cache.get(key)
+            if cached is not None:
+                return cached
         try:
             raw = await self._call(
                 "manage_sheets",
@@ -1387,17 +1439,21 @@ class GoogleWorkspaceConnector:
 
         if len(names) <= 1:
             single = await self._read_sheet_text(file_id)
-            return [single] if single else []
+            reports = [single] if single else []
+        else:
+            if len(names) > limit:
+                logger.info("%s has %d tabs, reading the first %d", file_id, len(names), limit)
+                names = names[:limit]
+            read = await asyncio.gather(
+                *(self._read_sheet_text(file_id, tab=name) for name in names),
+                return_exceptions=True,
+            )
+            # `gather` keeps the workbook's order. A tab that would not read
+            # is one missing sheet, not a failed document.
+            reports = [item for item in read if isinstance(item, str) and item]
 
-        if len(names) > limit:
-            logger.info("%s has %d tabs, reading the first %d", file_id, len(names), limit)
-            names = names[:limit]
-
-        reports: list[str] = []
-        for name in names:
-            report = await self._read_sheet_text(file_id, tab=name)
-            if report:
-                reports.append(report)
+        if ctx is not None:
+            ctx.cache[key] = reports
         return reports
 
     async def _fetch_file_bytes(self, file_id: str, type_hint: str | None) -> bytes | None:
@@ -1591,7 +1647,7 @@ class GoogleWorkspaceConnector:
                     logger.info("could not read doc %s: %s", file_id, summarise_exception(exc))
 
             if not text and is_google_spreadsheet(type_hint):
-                reports = await self._read_sheet_tabs(file_id)
+                reports = await self._read_sheet_tabs(file_id, ctx=ctx)
                 if reports:
                     # Every tab, addressed the same way the answer model saw
                     # it, so a reader checking a citation is looking at the
