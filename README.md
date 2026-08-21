@@ -321,6 +321,9 @@ docker/
   postgres/initdb/     kb database, kb_ro role, demo corpus
 vscode-extension/
   src/chat.ts          the @kb chat participant: transcript in, streamed answer out
+  src/coder.ts         the @coder agent loop: tool calls out, tool results back in
+  src/tools.ts         what it may do locally - files, terminal, and the KB search
+  src/toolOutput.ts    caps and path rules for tool results - pure, so tested
   src/sse.ts           the event-stream parser - pure, so node --test runs it
   src/format.ts        answer document, citation links, history mapping - pure
   src/http.ts          cookies and base URLs - pure, same reason

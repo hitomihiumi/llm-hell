@@ -43,6 +43,44 @@ billed.
 
 ---
 
+## `@coder` — the agent
+
+`@kb` answers from the corpus. `@coder` acts: it reads and writes files, runs
+commands, and searches the knowledge base, looping until the job is done.
+
+```
+@coder add a --dry-run flag to the seed script and show me the diff
+@coder what did we decide about the landing gear, and does the CAD match?
+```
+
+The model is **DeepSeek V4 Flash**, pinned with `AGENT_MODEL_ID`. It is a
+different model from the one that writes `@kb`'s answers, and deliberately so:
+`@kb` needs a reader, `@coder` needs a model that emits structured
+`tool_calls`, and the endpoint is registered with `--tools-mode native`
+because DeepSeek speaks the OpenAI tools API rather than the JSON-in-content
+fallback.
+
+| tool | |
+| --- | --- |
+| `read_file`, `list_directory` | capped at 24 000 characters, and the cut says how much is missing |
+| `write_file` | asks first |
+| `run_terminal` | asks first; killed after two minutes, so a dev server cannot hold the turn open |
+| `search_knowledge_base` | the same federated search `@kb` runs, without the answer step |
+
+Every tool runs in the extension host, including the search one. That is not
+where the search happens — it reaches the backend from here — but keeping all
+four on one side of the wire means the agent loop has one shape rather than
+two.
+
+Confirmation is on by default and covers the two tools that change something.
+Turn it off with `knowledgeBase.coder.confirmTools` if you would rather not be
+asked, knowing what that means.
+
+The loop stops after ten rounds of tool calls and says so, rather than going
+quiet mid-task.
+
+---
+
 ## Also there
 
 | | |

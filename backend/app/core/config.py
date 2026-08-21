@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     answer_ctx_reserve_tokens: int = 2048
     answer_temperature: float = 0.7
 
+    # --- Coding agent (tool-calling LLM) ----------------------------------
+    # Empty means "the same endpoint answer_model_id resolves to". Set it to
+    # a ModelEndpoint.model_id to pin a different model for @coder.
+    agent_model_id: str = ""
+    agent_max_output_tokens: int = 4096
+    agent_temperature: float = 0.2
+
     # --- Search federation ------------------------------------------------
     # Wall clock for one source's entire search(), which may span several
     # tool calls.

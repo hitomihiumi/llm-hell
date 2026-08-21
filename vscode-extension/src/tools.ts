@@ -1,6 +1,14 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
+import type { KnowledgeBaseClient } from "./client";
+import {
+  COMMAND_TIMEOUT_MS,
+  commandResult,
+  formatSearchResults,
+  isAbsolutePath,
+  truncate,
+} from "./toolOutput";
 
 /**
  * The tools the `@coder` agent can call in the local workspace.
@@ -82,6 +90,24 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "search_knowledge_base",
+      description:
+        "Search the team's Google Drive, Gmail, GitLab and internal knowledge base. Use this for anything not in the open workspace: design decisions, datasheets, schedules, other repositories, past discussion.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "What to look for, in the words a document would use",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "run_terminal",
       description: "Run a shell command in the workspace and return its output.",
       parameters: {
@@ -95,33 +121,59 @@ export const TOOLS: ToolDefinition[] = [
   },
 ];
 
+/**
+ * A path from the model, as a Uri.
+ *
+ * An absolute path is taken as it is; anything else is relative to the first
+ * workspace folder, which is what the model means when it says `src/main.ts`.
+ * `Uri.parse` used to make this decision and got it wrong twice over: it
+ * reads `C:\\src` as a URI with scheme `c`, and it reads `/etc/hosts` as
+ * having no scheme at all - so a POSIX absolute path was being joined onto
+ * the workspace folder and quietly read from the wrong place.
+ */
 function resolveUri(inputPath: string): vscode.Uri {
-  if (vscode.Uri.parse(inputPath).scheme) {
-    return vscode.Uri.file(inputPath);
+  const path = inputPath.trim();
+  if (isAbsolutePath(path)) {
+    return vscode.Uri.file(path);
   }
   const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) {
-    return vscode.Uri.file(inputPath);
-  }
-  return vscode.Uri.joinPath(folder.uri, inputPath);
+  return folder ? vscode.Uri.joinPath(folder.uri, path) : vscode.Uri.file(path);
 }
 
 function workspaceFolder(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
-export async function executeTool(call: ToolCall): Promise<string> {
+export async function executeTool(call: ToolCall, client: KnowledgeBaseClient): Promise<string> {
   const args = parseArgs(call.function.arguments);
   if (!(await confirmTool(call, args))) {
     return `Cancelled: ${call.function.name}`;
   }
 
   switch (call.function.name) {
+    case "search_knowledge_base": {
+      // Executed here rather than on the backend, like every other tool, so
+      // the agent loop has one shape. That this one happens to run by calling
+      // the backend is an implementation detail of the case, not a second
+      // protocol.
+      const query = String(args.query ?? "").trim();
+      if (!query) return "Error: no query provided.";
+      try {
+        // No answer: the agent is the thing that reasons over these, and
+        // paying a second model to write prose it will not read is waste.
+        const response = await client.search(query, { answer: false });
+        return formatSearchResults(response.hits);
+      } catch (error) {
+        return `Error searching the knowledge base: ${(error as Error).message}`;
+      }
+    }
     case "read_file": {
       const uri = resolveUri(String(args.path ?? ""));
       try {
         const bytes = await vscode.workspace.fs.readFile(uri);
-        return new TextDecoder().decode(bytes);
+        // Capped: a tool result goes straight into the next request, and one
+        // minified bundle would spend the whole context window.
+        return truncate(new TextDecoder().decode(bytes));
       } catch (error) {
         return `Error reading file: ${(error as Error).message}`;
       }
@@ -140,7 +192,8 @@ export async function executeTool(call: ToolCall): Promise<string> {
       const uri = resolveUri(String(args.path ?? ""));
       try {
         const entries = await vscode.workspace.fs.readDirectory(uri);
-        return entries.map(([name, type]) => `${name} (${fileTypeName(type)})`).join("\n");
+        const listing = entries.map(([name, type]) => `${name} (${fileTypeName(type)})`).join("\n");
+        return truncate(listing) || "[empty directory]";
       } catch (error) {
         return `Error listing directory: ${(error as Error).message}`;
       }
@@ -149,11 +202,30 @@ export async function executeTool(call: ToolCall): Promise<string> {
       const command = String(args.command ?? "");
       if (!command) return "Error: no command provided.";
       try {
-        const { stdout, stderr } = await execAsync(command, { cwd: workspaceFolder() });
-        return [stdout, stderr].filter(Boolean).join("\n");
+        const { stdout, stderr } = await execAsync(command, {
+          cwd: workspaceFolder(),
+          // A coding agent will eventually run a dev server. Without a
+          // deadline that turn never ends, and nothing on screen says
+          // whether it is working or stuck.
+          timeout: COMMAND_TIMEOUT_MS,
+          maxBuffer: 8 * 1024 * 1024,
+          windowsHide: true,
+        });
+        return commandResult(stdout, stderr, { code: 0 });
       } catch (error) {
-        const execError = error as Error & { stdout?: string; stderr?: string; code?: number };
-        return `Exit ${execError.code ?? "?"}: ${execError.message}\n${execError.stdout ?? ""}\n${execError.stderr ?? ""}`;
+        const failure = error as Error & {
+          stdout?: string;
+          stderr?: string;
+          code?: number;
+          killed?: boolean;
+          signal?: string;
+        };
+        return commandResult(failure.stdout ?? "", failure.stderr ?? "", {
+          code: failure.code ?? "?",
+          // `killed` with no exit code is how `exec` reports its own timeout.
+          timedOut: Boolean(failure.killed) && failure.code === undefined,
+          message: failure.message,
+        });
       }
     }
     default:

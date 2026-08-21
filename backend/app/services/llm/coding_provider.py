@@ -88,6 +88,23 @@ async def _select_endpoints(db: AsyncSession, settings: Settings) -> tuple[Model
     )
 
 
+async def _select_agent_endpoint(db: AsyncSession, settings: Settings) -> ModelEndpoint | None:
+    """The endpoint that powers the coding agent, optionally pinned separately."""
+    endpoints = list((await db.execute(select(ModelEndpoint).order_by(ModelEndpoint.name))).scalars().all())
+    enabled = [endpoint for endpoint in endpoints if endpoint.enabled]
+    if not enabled:
+        return None
+    if settings.agent_model_id:
+        for endpoint in enabled:
+            if endpoint.model_id == settings.agent_model_id:
+                return endpoint
+        logger.warning(
+            "AGENT_MODEL_ID=%r matches no enabled endpoint; using answer endpoint",
+            settings.agent_model_id,
+        )
+    return answer_service.select_endpoint(endpoints, settings)
+
+
 async def _page_images(
     hits: list[SearchHit], registry: McpRegistry, settings: Settings
 ) -> dict[str, list[bytes]]:
@@ -335,6 +352,7 @@ async def _stream_agent(
     endpoint: ModelEndpoint,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
+    settings: Settings,
     http_client: httpx.AsyncClient,
 ) -> AsyncIterator[bytes]:
     """Pass through the upstream streaming deltas as OpenAI SSE."""
@@ -343,8 +361,8 @@ async def _stream_agent(
         endpoint,
         messages,
         http_client=http_client,
-        max_tokens=4096,
-        temperature=0.2,
+        max_tokens=settings.agent_max_output_tokens,
+        temperature=settings.agent_temperature,
         tools=tools,
     ):
         event.setdefault("id", chunk_id)
@@ -370,7 +388,7 @@ async def agent_chat(
             status_code=400,
         )
 
-    endpoint, _ = await _select_endpoints(db, settings)
+    endpoint = await _select_agent_endpoint(db, settings)
     if endpoint is None:
         return JSONResponse(
             {"error": {"message": "no answer model endpoint is registered", "type": "service_unavailable"}},
@@ -380,7 +398,7 @@ async def agent_chat(
     stream = bool(body.get("stream", False))
     if stream:
         return StreamingResponse(
-            _stream_agent(endpoint, messages, tools, http_client),
+            _stream_agent(endpoint, messages, tools, settings, http_client),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -394,8 +412,8 @@ async def agent_chat(
             endpoint,
             messages,
             http_client=http_client,
-            max_tokens=4096,
-            temperature=0.2,
+            max_tokens=settings.agent_max_output_tokens,
+            temperature=settings.agent_temperature,
             tools=tools,
         )
     except llm_chat.ChatError as exc:

@@ -6,15 +6,19 @@ import { executeTool, TOOLS, type ToolCall } from "./tools";
 /**
  * `@coder` in the chat panel.
  *
- * Where `@kb` searches the corpus and cites what it found, `@coder` asks the
- * same backend to act as an OpenAI-compatible coding model. The backend still
- * runs its RAG pipeline, but the conversation is carried in the standard
- * chat-completion format so it feels like any other coding assistant.
+ * Where `@kb` searches the corpus and cites what it found, `@coder` is an
+ * agent: the backend hands the conversation to a tool-calling model — DeepSeek
+ * by default, pinned with `AGENT_MODEL_ID` — and this participant runs
+ * whatever that model asks for.
  *
- * Tool mode: when the backend returns `tool_calls`, this participant executes
- * the matching local tools (read/write files, list directories, run shell
- * commands) and sends the results back, looping until the model produces a
- * final answer.
+ * The tools run in the extension host, because that is where the files and the
+ * terminal are. `search_knowledge_base` runs here too and reaches the backend
+ * from here: keeping every tool on one side of the wire means the loop has one
+ * shape rather than two.
+ *
+ * That loop is the participant's whole job. Send the conversation, collect the
+ * `tool_calls` the model streams back, execute them, append the results, and
+ * go round again until it answers with prose instead of another call.
  */
 
 export const PARTICIPANT_ID = "knowledgeBase.coder";
@@ -44,6 +48,7 @@ export function registerCoderParticipant(
 
       const messages: ChatMessage[] = buildMessages(chatContext.history, question);
 
+      let finished = false;
       try {
         for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
           if (token.isCancellationRequested) break;
@@ -52,7 +57,10 @@ export function registerCoderParticipant(
           }
 
           const result = await runTurn(client, messages, stream, abort.signal, token);
-          if (result.toolCalls.length === 0) break;
+          if (result.toolCalls.length === 0) {
+            finished = true;
+            break;
+          }
 
           messages.push({
             role: "assistant",
@@ -62,7 +70,7 @@ export function registerCoderParticipant(
 
           for (const call of result.toolCalls) {
             stream.markdown(`\n\n*Running **${call.function.name}**…*\n\n`);
-            const output = await executeTool(call);
+            const output = await executeTool(call, client);
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -79,6 +87,15 @@ export function registerCoderParticipant(
         }
         const message = (error as Error).message ?? String(error);
         return { errorDetails: { message } };
+      }
+
+      if (!finished && !token.isCancellationRequested) {
+        // The loop ran out of turns rather than reaching an answer. Saying so
+        // is the difference between an agent that stopped and an agent that
+        // looks like it forgot what it was doing halfway through.
+        stream.markdown(
+          `\n\n_Stopped after ${MAX_AGENT_TURNS} tool rounds. Ask again to carry on._\n`,
+        );
       }
 
       return {};

@@ -4,17 +4,50 @@ The app calls any endpoint that speaks the OpenAI chat API, so a hosted
 gateway and a self-hosted vLLM server are the same thing to it — only the URL,
 the key and the model id differ. Nothing in the code special-cases OpenRouter.
 
-Two jobs are done, and they are separate concerns even when one model does
-both:
+Three jobs are done, and they are separate concerns even when one model does
+more than one of them:
 
 | role | what it does | why it is separate |
 | --- | --- | --- |
 | **answer** | reads the fused search results and writes the cited answer | reasons; sees the question |
 | **vision** | turns a PDF page image into text | transcribes; never sees the question |
+| **agent** | drives `@coder`: emits tool calls, reads their results, loops | acts; needs native tool calling |
 
-They may be one endpoint or two. `ANSWER_MODEL_ID` and `VISION_MODEL_ID` are
-matched against the `model_id` of any **enabled** endpoint, so pointing both
-at the same multimodal model needs one row and no special case.
+They may be one endpoint or three. `ANSWER_MODEL_ID`, `VISION_MODEL_ID` and
+`AGENT_MODEL_ID` are matched against the `model_id` of any **enabled**
+endpoint, so pointing two of them at the same multimodal model needs one row
+and no special case.
+
+The agent is the one role that will not share. It has to emit structured
+`tool_calls`, which is a capability rather than a preference — a model without
+it produces prose about calling a tool and the loop never advances. Register
+its endpoint with `--tools-mode native`:
+
+```bash
+docker compose exec api python manage.py add-endpoint \
+  --name "DeepSeek V4 Flash (coding agent)" \
+  --base-url https://openrouter.ai/api/v1 \
+  --model-id deepseek/deepseek-v4-flash-0731 \
+  --api-key sk-or-v1-... --role executor --ctx-window 131072 \
+  --tools-mode native
+```
+
+```
+AGENT_MODEL_ID=deepseek/deepseek-v4-flash-0731
+```
+
+Measured against the live stack, with `read_file` and `search_knowledge_base`
+both on offer: "read config.py and tell me what VERSION is" produced
+`read_file({"path": "config.py"})` and then, given the file back, "VERSION is
+set to '4.2.1'"; "according to the team's Gantt chart, when were the Team
+Object parts 3D printed" produced
+`search_knowledge_base({"query": "Gantt chart Team Object parts 3D printed"})`.
+Picking between the workspace and the corpus is the whole job, and it is the
+model that does it.
+
+A pin that matches nothing falls back to the answer endpoint and logs it,
+which for a tool-calling job usually means the loop stalls — check the log
+before concluding the agent is broken.
 
 ## One model, one pass
 
