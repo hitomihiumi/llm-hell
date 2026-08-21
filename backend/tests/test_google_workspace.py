@@ -10,6 +10,8 @@ from app.models.source import SOURCE_GOOGLE_DRIVE
 from app.schemas.search import SearchHit
 from app.services.mcp.google import (
     GoogleWorkspaceConnector,
+    _scopes,
+    _token_is_valid,
     _workspace_text_mime_type,
     _worth_reading,
     drive_size_hints,
@@ -235,3 +237,76 @@ def test_only_as_many_as_the_budget_allows():
     hits = [_hit(f"file {index}", index) for index in range(10)]
 
     assert len(_worth_reading(hits, "file", 3)) == 3
+
+
+# --- reading an account's status ------------------------------------------------
+#
+# Verbatim from a running v4.2.1, because both of the bugs these cover came
+# from guessing at the format rather than looking at it.
+
+CONNECTED = """## Account Status: vlad@borzo.ai
+
+[x] Token valid
+[x] Has refresh token
+**Scopes (12):**
+- userinfo.email
+- calendar
+- documents
+- drive
+- gmail.modify
+- openid
+
+---
+**Next steps:**
+- Refresh credentials: `manage_accounts`
+"""
+
+NEVER_CONNECTED = """## Account Status: nobody@example.com
+
+[ ] Token invalid
+[ ] No refresh token
+**Scopes (0):**
+(no scopes)
+
+---
+**Next steps:**
+- Refresh credentials: `manage_accounts`
+"""
+
+
+def test_an_account_with_credentials_reads_as_connected():
+    assert _token_is_valid(CONNECTED) is True
+
+
+def test_an_account_without_them_does_not():
+    """The bug this exists for: the first version asked whether the report
+    contained "valid", which is true of "invalid" too - so an address that
+    had never authenticated reported as connected, and searching as it
+    returned an empty Drive with no explanation."""
+    assert _token_is_valid(NEVER_CONNECTED) is False
+
+
+def test_an_access_token_without_a_refresh_token_is_not_connected():
+    """It works for an hour and then stops, which is worse than failing now."""
+    partial = CONNECTED.replace("[x] Has refresh token", "[ ] No refresh token")
+
+    assert _token_is_valid(partial) is False
+
+
+def test_nothing_at_all_is_not_connected():
+    assert _token_is_valid("") is False
+
+
+def test_the_granted_scopes_are_read():
+    """Also from guessing: the first version looked for full
+    `https://www.googleapis.com/auth/...` URLs and the server prints short
+    names, so twelve scopes were reported as none."""
+    scopes = _scopes(CONNECTED)
+
+    assert "drive" in scopes
+    assert "gmail.modify" in scopes
+    assert len(scopes) == 6
+
+
+def test_an_account_with_no_scopes_has_none_rather_than_a_placeholder():
+    assert _scopes(NEVER_CONNECTED) == []

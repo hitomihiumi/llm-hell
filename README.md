@@ -304,7 +304,8 @@ backend/
   manage.py            operator CLI: users, keys, endpoints, sources
   app/
     api/               auth, search, sources, records, debug, openai_proxy, metrics
-    core/              config, db, security, sessions (cookie), api_keys (bearer)
+    core/              config, db, security, sessions (cookie), api_keys (bearer),
+                       crypto (per-user credentials at rest)
     models/            User, UserSession, Source, SearchQuery, ModelEndpoint, LlmRequest
     services/
       mcp/             transport (the ONLY file importing the MCP SDK),
@@ -329,7 +330,7 @@ vscode-extension/
   src/http.ts          cookies and base URLs - pure, same reason
   src/client.ts        signs in the way the web app does; no server change needed
 tools/mcp_probe.py     standalone MCP prober
-docs/                  spike findings, Google runbook, test-database runbook, proxy notes
+docs/                  spike findings, Google runbook, per-user credentials, proxy notes
 ```
 
 All code, comments and developer docs are in English.

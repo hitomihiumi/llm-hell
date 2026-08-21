@@ -357,6 +357,44 @@ _DRIVE_TYPE = re.compile(r"^\*\*Type:\*\*\s*(\S+)\s*$", re.MULTILINE)
 _SIZE = re.compile(r"^\*\*Size:\*\*\s*([\d.]+)\s*(B|KB|MB|GB|TB)\s*$", re.MULTILINE)
 
 
+_URL = re.compile(r"https://accounts\.google\.com/\S+")
+
+# `[x] Token valid` against `[ ] Token invalid`. Read as a checkbox rather
+# than as prose, and that is not fussiness: the first version of this asked
+# whether the report contained "valid", which is true of "invalid" as well -
+# so an account that had never authenticated reported as connected. The
+# refresh token is checked too, because an account with a live access token
+# and no refresh token stops working within the hour.
+_TOKEN_VALID = re.compile(r"^\[x\]\s*Token valid\s*$", re.IGNORECASE | re.MULTILINE)
+_HAS_REFRESH = re.compile(r"^\[x\]\s*Has refresh token\s*$", re.IGNORECASE | re.MULTILINE)
+
+# The bullet list under `**Scopes (12):**`. Short names, not URLs - which the
+# first version of this expected, and so reported twelve scopes as none.
+_SCOPES_BLOCK = re.compile(r"\*\*Scopes \(\d+\):\*\*(.*?)(?:\n\s*\n|\n---)", re.DOTALL)
+_SCOPE_LINE = re.compile(r"^-\s*(\S+)\s*$", re.MULTILINE)
+
+
+def _first_url(text: str) -> str | None:
+    """The consent URL out of the server's prose report."""
+    found = _URL.search(text or "")
+    # Trailing punctuation from the surrounding sentence is not part of a URL.
+    return found.group(0).rstrip(").,'\"") if found else None
+
+
+def _token_is_valid(text: str) -> bool:
+    """Whether the server holds working credentials for the account."""
+    return bool(_TOKEN_VALID.search(text or "")) and bool(_HAS_REFRESH.search(text or ""))
+
+
+def _scopes(text: str) -> list[str]:
+    """Granted scopes, for showing what an account may actually reach."""
+    block = _SCOPES_BLOCK.search(text or "")
+    if not block:
+        return []
+    names = [match.group(1) for match in _SCOPE_LINE.finditer(block.group(1))]
+    return [name for name in names if name != "(no"]
+
+
 def parse_drive_type(text: str) -> str | None:
     """The mime type out of a `manage_drive get` report.
 
@@ -794,14 +832,80 @@ class GoogleWorkspaceConnector:
         configured = (self._source.config or {}).get("account_email") if self._source else None
         return configured or self._settings.google_account_email or None
 
-    def _base_args(self) -> dict[str, Any]:
+    def _base_args(self, ctx: "SearchContext | None" = None) -> dict[str, Any]:
         # `email` is REQUIRED by both tool schemas - the server is
         # multi-account and has no notion of a default one. There is nothing
         # to fall back to, so a missing account is a configuration error
         # raised before the call rather than a schema rejection after it.
-        if not self._account:
+        #
+        # Which account is the per-user question. The server being
+        # multi-account is what makes this work at all: one user's consent
+        # produces one more credential file, and addressing it is a matter of
+        # sending their email rather than the deployment's.
+        account = (ctx.google_account if ctx else None) or self._account
+        if not account:
             raise McpError("GOOGLE_ACCOUNT_EMAIL is not set, and the Google tools require an account address")
-        return {"email": self._account}
+        return {"email": account}
+
+    # --- accounts ---------------------------------------------------------
+
+    async def begin_account_auth(self, email: str) -> dict[str, Any]:
+        """Whether this address can be searched as, and what to do if not.
+
+        **The consent flow cannot be driven from here, and that is the
+        server's limit rather than a missing feature.** `manage_accounts`
+        has an `authenticate` operation whose description says "opens
+        browser", and in a container that is exactly what it tries to do: it
+        spawns a browser, waits for the local OAuth callback, and never
+        returns. Measured - the call hung until the 25-second tool timeout
+        killed it, with no URL emitted at any point.
+
+        So this asks the question that can be answered. An account the server
+        already holds credentials for is usable immediately; one it does not
+        has to be added where a browser exists, which is the same workstation
+        procedure docs/google-workspace-setup.md already describes for the
+        first account.
+        """
+        account = await self.account_status(email)
+        if account.get("authenticated"):
+            return {
+                "authenticated": True,
+                "url": None,
+                "message": f"{email} is already connected - {len(account.get('scopes', []))} scopes granted.",
+            }
+        return {
+            "authenticated": False,
+            "url": None,
+            "message": (
+                f"Google has no working credentials for {email}.\n\n"
+                "This server cannot run the consent flow itself: its authenticate "
+                "operation opens a browser and waits for a local callback, which a "
+                "container has neither of. Add the account where a browser exists:\n\n"
+                "  docker compose exec google-mcp node /usr/local/lib/node_modules/"
+                "@aaronsb/google-workspace-mcp/build/index.js\n\n"
+                "or follow docs/google-workspace-setup.md, which covers the same "
+                "procedure for the first account. Once the account appears, connect "
+                "it here and searches will run as it."
+            ),
+        }
+
+    async def account_status(self, email: str) -> dict[str, Any]:
+        """Whether the server holds working credentials for an address.
+
+        Asked rather than assumed. A user who closed the consent tab would
+        otherwise be recorded as connected and get an empty Drive.
+        """
+        try:
+            raw = await self._call("manage_accounts", {"email": email, "operation": "status"})
+        except Exception as exc:  # noqa: BLE001 - an unreachable server is not "not authenticated"
+            return {"authenticated": False, "message": summarise_exception(exc)}
+
+        text = raw.text or ""
+        return {
+            "authenticated": _token_is_valid(text),
+            "message": text[:2000],
+            "scopes": _scopes(text),
+        }
 
     async def _call(self, tool: str, arguments: dict[str, Any]) -> RawToolResult:
         """Route a call through whichever transport is configured.
@@ -878,7 +982,7 @@ class GoogleWorkspaceConnector:
 
         try:
             arguments = {
-                **self._base_args(),
+                **self._base_args(ctx),
                 "operation": "search",
                 "query": drive_query(query) if is_drive else gmail_query(query),
                 "maxResults": min(limit, MAX_RESULTS),

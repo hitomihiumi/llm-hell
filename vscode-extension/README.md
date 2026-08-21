@@ -124,6 +124,30 @@ has none, but the credential that establishes one is still in the keychain, so
 the first request signs in without asking. Asking while signed out puts a
 **Sign in** button in the chat turn.
 
+### Connecting Google and GitLab
+
+Signing in says who you are. It does not say what you may read — Drive belongs
+to Google, the repositories to a GitLab instance — so **Knowledge Base:
+Connect Accounts** is the second half of it. Connect them and your searches
+run as you; connect nothing and they run on the server's own access, which for
+a one-person install is exactly right.
+
+GitLab takes a personal access token with `read_api`. It is verified against
+the instance before it is stored, so a token with the wrong scopes is refused
+here with a reason rather than surfacing next week as a source that returns
+nothing.
+
+Google is addressed rather than authorised from here: the Workspace server is
+multi-account, and connecting picks which address your searches use. It cannot
+run consent itself — that operation opens a browser and waits for a local
+callback, which a container has neither of — so an account not yet known to
+the server has to be added where a browser exists. The extension shows the
+server's own instructions when that is the case.
+
+**No token is ever stored on this side.** The editor's secret storage holds
+your knowledge-base password and nothing else; a GitLab token is posted once,
+encrypted server-side, and never read back. See `docs/per-user-credentials.md`.
+
 ### Why a password and not an API key
 
 The backend has two authentication mechanisms and keeps them deliberately

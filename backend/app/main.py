@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.content import router as content_router
+from app.api.credentials import router as credentials_router
 from app.api.debug import router as debug_router
 from app.api.metrics import router as metrics_router
 from app.api.openai_proxy import close_http_client
@@ -60,6 +61,7 @@ app.include_router(auth_router)
 app.include_router(search_router)
 app.include_router(sources_router)
 app.include_router(content_router)
+app.include_router(credentials_router)
 app.include_router(preview_router)
 app.include_router(records_router)
 app.include_router(debug_router)

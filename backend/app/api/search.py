@@ -33,6 +33,7 @@ from app.schemas.search import (
     SearchRequest,
     SearchResponse,
 )
+from app.services import credentials as credential_service
 from app.services.llm.coding_provider import CODING_PROVIDER_MODEL_ID
 from app.services.llm.coding_provider import chat_completions as coding_chat_completions
 from app.services.mcp.connector import SearchContext
@@ -161,6 +162,22 @@ async def _page_images(
     return images
 
 
+async def _caller_credentials(db: AsyncSession, user, settings) -> tuple[dict[str, str], str | None]:
+    """The caller's own tokens, for a search that runs as them.
+
+    Empty when they have connected nothing, which is not a degraded state:
+    the connectors then use the deployment-wide credentials they always did.
+    """
+    gitlab = await credential_service.secret_for(
+        db, user=user, provider="gitlab", settings=settings
+    )
+    google = await credential_service.secret_for(
+        db, user=user, provider="google", settings=settings
+    )
+    tokens = {"gitlab": gitlab} if gitlab else {}
+    return tokens, google
+
+
 @router.post("/search", response_model=SearchResponse)
 async def search(
     payload: SearchRequest,
@@ -171,6 +188,7 @@ async def search(
 ) -> SearchResponse:
     settings = get_settings()
     endpoint, vision = await _endpoints(db, settings)
+    tokens, google_account = await _caller_credentials(db, current, settings)
     ctx = SearchContext(
         db=db,
         user=current,
@@ -178,6 +196,8 @@ async def search(
         answer_endpoint=endpoint,
         vision_endpoint=vision,
         debug=payload.debug,
+        tokens=tokens,
+        google_account=google_account,
     )
 
     queries = await planner.plan_queries(
@@ -249,10 +269,13 @@ async def search_stream(
 
     async def events() -> AsyncIterator[bytes]:
         endpoint, vision = await _endpoints(db, settings)
+        tokens, google_account = await _caller_credentials(db, current, settings)
         ctx = SearchContext(
             db=db,
             user=current,
             http_client=http_client,
+            tokens=tokens,
+            google_account=google_account,
             answer_endpoint=endpoint,
             vision_endpoint=vision,
             debug=payload.debug,

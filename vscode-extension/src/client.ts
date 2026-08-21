@@ -4,7 +4,15 @@
 import { parseCookies, readSetCookie, withScheme } from "./http.ts";
 import { type ServerEvent, SseParser } from "./sse.ts";
 import type { ToolDefinition } from "./tools.ts";
-import type { ChatTurn, Content, SearchHit, SearchResponse, Source } from "./types";
+import type {
+  ChatTurn,
+  Content,
+  CredentialStatus,
+  GoogleAuthStart,
+  SearchHit,
+  SearchResponse,
+  Source,
+} from "./types";
 
 /**
  * The HTTP side of the extension.
@@ -243,6 +251,51 @@ export class KnowledgeBaseClient {
     // as a path, so each segment is encoded but the separators are kept.
     const path = hit.id.split("/").map(encodeURIComponent).join("/");
     return this.json<Content>("GET", `/api/content/${path}`);
+  }
+
+  // --- the user's own credentials ------------------------------------------
+  //
+  // Signing in to this application says who you are. It does not say what
+  // you may read: Drive and GitLab are other people's systems and want their
+  // own consent. These four are that second conversation.
+
+  /** Connection state per provider. Never carries a secret. */
+  async credentials(): Promise<CredentialStatus[]> {
+    return this.json<CredentialStatus[]>("GET", "/api/credentials");
+  }
+
+  /**
+   * Hand over a GitLab token.
+   *
+   * The backend verifies it against the instance before storing it, so a
+   * token with the wrong scopes is refused here, with a reason, rather than
+   * three days later as a search that quietly returns nothing.
+   */
+  async connectGitLab(token: string, apiUrl?: string): Promise<CredentialStatus> {
+    return this.json<CredentialStatus>("PUT", "/api/credentials/gitlab", {
+      token,
+      api_url: apiUrl || null,
+    });
+  }
+
+  /** Begin Google consent. Returns the URL the user has to visit. */
+  async startGoogle(): Promise<GoogleAuthStart> {
+    return this.json<GoogleAuthStart>("POST", "/api/credentials/google/start");
+  }
+
+  /**
+   * Record the consent, once it has actually been given.
+   *
+   * The backend asks Google's MCP server whether the account is really
+   * authenticated rather than taking our word for it, so calling this too
+   * early fails loudly instead of leaving a connection that does not work.
+   */
+  async confirmGoogle(): Promise<CredentialStatus> {
+    return this.json<CredentialStatus>("POST", "/api/credentials/google/confirm");
+  }
+
+  async disconnect(provider: string): Promise<void> {
+    await this.authorised("DELETE", `/api/credentials/${encodeURIComponent(provider)}`);
   }
 
   async sources(): Promise<Source[]> {

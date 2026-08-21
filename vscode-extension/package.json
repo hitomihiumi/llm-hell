@@ -89,7 +89,7 @@
       {
         "view": "knowledgeBase.results",
         "when": "knowledgeBase.signedIn",
-        "contents": "Ask in the chat panel with **@kb**, and the results land here.\n[Open chat](command:knowledgeBase.openChat)\n\nOr search without a conversation:\n[Search](command:knowledgeBase.search)"
+        "contents": "Ask in the chat panel with **@kb**, and the results land here.\n[Open chat](command:knowledgeBase.openChat)\n\nSearching your own Drive and GitLab needs your accounts connected.\n[Connect accounts](command:knowledgeBase.accounts)\n\nOr search without a conversation:\n[Search](command:knowledgeBase.search)"
       }
     ],
     "commands": [
@@ -154,6 +154,12 @@
         "command": "knowledgeBase.copyLink",
         "title": "Copy Link",
         "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.accounts",
+        "title": "Connect Accounts (Google, GitLab)",
+        "category": "Knowledge Base",
+        "icon": "$(key)"
       }
     ],
     "menus": {
@@ -182,6 +188,11 @@
           "command": "knowledgeBase.refresh",
           "when": "view == knowledgeBase.results",
           "group": "navigation@4"
+        },
+        {
+          "command": "knowledgeBase.accounts",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [

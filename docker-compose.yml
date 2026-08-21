@@ -99,8 +99,21 @@ services:
       STREAMABLE_HTTP: "true"
       HOST: "0.0.0.0"
       PORT: "3002"
-      GITLAB_PERSONAL_ACCESS_TOKEN: ${GITLAB_PERSONAL_ACCESS_TOKEN:-}
+      # NOT passed any more, and that is the point. In REMOTE_AUTHORIZATION
+      # mode the server takes its GitLab credential from each request, so the
+      # api container decides whose token to use - the caller's own, or the
+      # deployment's when they have not connected one. A server-side PAT here
+      # would be dead configuration that looks live.
       GITLAB_API_URL: ${GITLAB_API_URL:-https://gitlab.com/api/v4}
+      # Per-request credentials. Without this the server reads `private-token`
+      # off a request and ignores it, using its own env PAT for everybody -
+      # which looks exactly like per-user auth working and is not. Measured:
+      # a deliberately wrong token still returned the same two hits.
+      #
+      # There is no middle setting. With this on, a request carrying no token
+      # gets no GitLab access at all (`buildAuthHeaders` returns `{}`), so the
+      # fallback to the deployment's token lives in the connector instead.
+      REMOTE_AUTHORIZATION: "true"
       # Read-only: this is a search integration and has no business
       # creating issues or pushing commits.
       GITLAB_PERMISSION_MODE: readonly

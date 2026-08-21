@@ -103,6 +103,20 @@ async def _run_one(
             answer_endpoint=ctx.answer_endpoint,
             vision_endpoint=ctx.vision_endpoint,
             debug=ctx.debug,
+            # The caller's own credentials, and the account they speak for.
+            # Dropping these would silently search as the deployment instead
+            # of as the user, which is the kind of wrong that looks right.
+            tokens=ctx.tokens,
+            google_account=ctx.google_account,
+            # The SAME dict, deliberately shared. This function runs once per
+            # source per planned phrasing, so a fresh cache here would mean
+            # four phrasings each reading the same spreadsheet from scratch -
+            # which is what happened, and what the cache was added to stop.
+            #
+            # Two phrasings can still both miss and both fetch, because there
+            # is an await between the check and the store. That costs the
+            # duplicate work it was already doing and never a wrong answer.
+            cache=ctx.cache,
         )
         try:
             return await asyncio.wait_for(connector.search(query, limit=limit, ctx=connector_ctx), timeout=timeout)

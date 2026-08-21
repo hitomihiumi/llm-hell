@@ -47,6 +47,17 @@ class SearchContext:
     # nothing else, which is a document read less well rather than an error.
     vision_endpoint: ModelEndpoint | None = None
     debug: bool = False
+    # The caller's own credentials, by provider, when they connected any.
+    #
+    # Absent means "use the deployment-wide token", which is how this stack
+    # ran before per-user credentials existed and how a single-tenant install
+    # still runs. A connector must therefore treat a missing entry as normal
+    # rather than as a failure to authenticate.
+    tokens: dict[str, str] = field(default_factory=dict)
+    # Which Google account to address. The Workspace server is multi-account
+    # and every tool takes an `email`; this is how one user's Drive is
+    # searched rather than the deployment's.
+    google_account: str | None = None
     # Scratch space for one request, keyed however the connector likes.
     #
     # It exists because a search runs several phrasings of the same question

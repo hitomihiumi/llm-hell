@@ -7,6 +7,7 @@ from app.models.search_query import SearchQuery
 from app.models.session import UserSession
 from app.models.source import Source
 from app.models.user import User
+from app.models.user_credential import UserCredential
 
 __all__ = [
     "Base",
@@ -18,4 +19,5 @@ __all__ = [
     "Source",
     "SearchQuery",
     "DocumentPage",
+    "UserCredential",
 ]

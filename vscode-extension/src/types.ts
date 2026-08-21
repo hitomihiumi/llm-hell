@@ -88,3 +88,41 @@ export interface ChatTurn {
   role: "user" | "assistant";
   content: string;
 }
+
+/**
+ * One provider's connection state, as the backend reports it.
+ *
+ * There is no field for a token, and there is no route that would return
+ * one: the secret is encrypted in a column the API never reads back out. What
+ * is here is what an interface needs to say whether a source will work.
+ */
+export interface CredentialStatus {
+  provider: "google" | "gitlab";
+  connected: boolean;
+  /** The account it speaks for - an email, or a GitLab username. */
+  account: string | null;
+  expires_at: string | null;
+  expired: boolean;
+  last_verified_at: string | null;
+  detail: Record<string, unknown>;
+  /**
+   * False when the backend has no encryption key configured. Not a fault:
+   * that deployment uses its own tokens for everyone, and the interface has
+   * to say so rather than offering a button that quietly does nothing.
+   */
+  storage_available: boolean;
+}
+
+/** What starting Google consent hands back: a URL for the user to visit. */
+export interface GoogleAuthStart {
+  email: string;
+  /**
+   * Whether the Workspace server already holds working credentials for the
+   * address. When false, `message` says how to add them: that server owns
+   * consent and cannot run it headless, so there is nothing to click here.
+   */
+  authenticated: boolean;
+  /** Reserved - the Workspace server opens a browser rather than emitting a URL. */
+  url: string | null;
+  message: string;
+}

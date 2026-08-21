@@ -31,6 +31,16 @@ class Settings(BaseSettings):
 
     use_mock_vllm: bool = True
 
+    # --- Per-user credentials ---------------------------------------------
+    # A Fernet key, and the only thing standing between a database dump and
+    # every user's Google refresh token. Empty disables per-user credentials
+    # entirely: the sources then use the deployment-wide tokens they always
+    # did, which is the correct behaviour for a single-tenant install rather
+    # than a degraded one.
+    #
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    credentials_encryption_key: str = ""
+
     # --- Web session auth -------------------------------------------------
     session_cookie_name: str = "kb_session"
     csrf_cookie_name: str = "kb_csrf"

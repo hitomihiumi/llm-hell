@@ -105,8 +105,41 @@ class GitLabConnector:
 
     @property
     def _headers(self) -> dict[str, str]:
+        """The gate on the MCP endpoint itself, and nothing to do with GitLab.
+
+        This bearer token is a shared secret between the api container and the
+        MCP one; without it the server refuses to serve streamable HTTP at all.
+        The GitLab credential is a separate header - see `_headers_for`.
+        """
         token = self._settings.gitlab_mcp_auth_token
         return {"Authorization": f"Bearer {token}"} if token else {}
+
+    def _headers_for(self, ctx: SearchContext | None) -> dict[str, str]:
+        """The MCP headers for this caller.
+
+        Two credentials travel here and they authenticate different things.
+        `Authorization` is the shared secret gating the MCP endpoint itself -
+        without it the server refuses to serve at all. `Private-Token` is the
+        GitLab credential the request is to be executed with.
+
+        **Every request carries one, and that is not belt and braces.** The
+        server runs with REMOTE_AUTHORIZATION, where it takes its GitLab
+        credential from the request and has none of its own: a request without
+        a token gets no access rather than the deployment's. So the fallback
+        lives here - the caller's token when they connected one, the
+        deployment's when they did not.
+
+        Both halves were confirmed against the running image rather than
+        assumed, and the first assumption was wrong: in the default mode the
+        server reads `private-token` off the request and ignores it, so a
+        deliberately wrong token still returned the same hits. A per-user
+        credential that silently does nothing is worse than one that fails.
+        """
+        headers = dict(self._headers)
+        token = (ctx.tokens.get("gitlab") if ctx else None) or self._settings.gitlab_personal_access_token
+        if token:
+            headers["Private-Token"] = token
+        return headers
 
     @property
     def _configured_projects(self) -> list[str]:
@@ -135,7 +168,9 @@ class GitLabConnector:
 
     async def health(self) -> dict[str, Any]:
         try:
-            async with http_session(self._settings.gitlab_mcp_url, self._headers) as session:
+            # The deployment's own credential: `health` reports on the
+            # installation rather than on one person's access.
+            async with http_session(self._settings.gitlab_mcp_url, self._headers_for(None)) as session:
                 tools = await list_tool_names(session, timeout=self._settings.mcp_init_timeout_seconds)
         except Exception as exc:  # noqa: BLE001 - reported, never raised
             return {"ok": False, "error": summarise_exception(exc), "url": self._settings.gitlab_mcp_url}
@@ -164,7 +199,7 @@ class GitLabConnector:
         result = SourceResult(source_key=self.key)
 
         try:
-            async with http_session(self._settings.gitlab_mcp_url, self._headers) as session:
+            async with http_session(self._settings.gitlab_mcp_url, self._headers_for(ctx)) as session:
                 repo_hits, repo_error = await self._search_repositories(session, query, limit=limit, ctx=ctx)
                 code_hits, code_error, mode = await self._search_code(session, query, limit=limit, ctx=ctx)
         except Exception as exc:  # noqa: BLE001 - isolation is the contract
@@ -185,7 +220,7 @@ class GitLabConnector:
         # person means by "what is this repository".
         readmes = 0
         try:
-            async with http_session(self._settings.gitlab_mcp_url, self._headers) as session:
+            async with http_session(self._settings.gitlab_mcp_url, self._headers_for(ctx)) as session:
                 readmes = await self._enrich_readmes(session, result.hits, query=query)
         except Exception as exc:  # noqa: BLE001 - enrichment is a bonus, never the result
             logger.info("README enrichment skipped: %s", summarise_exception(exc))
@@ -412,7 +447,7 @@ class GitLabConnector:
         if len(parts) < 3 or parts[0] != self.key:
             return None
 
-        async with http_session(self._settings.gitlab_mcp_url, self._headers) as session:
+        async with http_session(self._settings.gitlab_mcp_url, self._headers_for(ctx)) as session:
             if parts[1] == "project":
                 project = self._project_paths.get(parts[2], parts[2])
                 text = await self._read_readme(session, project)

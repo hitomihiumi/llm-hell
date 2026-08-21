@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { registerChatParticipant } from "./chat";
 import { ApiError, AuthError, KnowledgeBaseClient } from "./client";
 import { registerCoderParticipant } from "./coder";
+import { manageCredentials, offerMissing } from "./credentials";
 import { answerUri, applyLanguage, hitUri, KnowledgeBaseDocuments, SCHEME } from "./documents";
 import { answerMarkdown, collapse } from "./format";
 import { ResultsProvider } from "./resultsView";
@@ -50,7 +51,13 @@ export function activate(context: vscode.ExtensionContext): void {
   /** Sign in and reflect it, wherever the prompt came from. */
   async function authenticate(): Promise<boolean> {
     const ok = await signIn(client);
-    if (ok) await setSignedIn(true);
+    if (ok) {
+      await setSignedIn(true);
+      // Signing in says who you are; it does not say what you may read.
+      // Offered once, here, because this is the moment the difference
+      // becomes visible - and never nagged afterwards.
+      void offerMissing(client);
+    }
     return ok;
   }
 
@@ -96,6 +103,8 @@ export function activate(context: vscode.ExtensionContext): void {
     ...coderChat,
 
     vscode.commands.registerCommand("knowledgeBase.openChat", () => askInChat("")),
+
+    vscode.commands.registerCommand("knowledgeBase.accounts", () => manageCredentials(client)),
 
     vscode.commands.registerCommand("knowledgeBase.openCoderChat", () => askInCoderChat("")),
 
