@@ -23,6 +23,7 @@ from app.models.endpoint import ModelEndpoint
 from app.models.source import SOURCE_GOOGLE_DRIVE
 from app.models.user import User
 from app.schemas.search import ChatTurn, SearchHit
+from app.services.llm import chat as llm_chat
 from app.services.mcp.connector import SearchContext
 from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.registry import McpRegistry
@@ -33,6 +34,12 @@ from app.services.search.service import federated_search
 logger = logging.getLogger("llmhell.coding_provider")
 
 CODING_PROVIDER_MODEL_ID = "llmhell/coder"
+
+AGENT_SYSTEM_PROMPT = (
+    "You are a helpful coding assistant. You can read and write files in the user's workspace "
+    "and run commands in their terminal. When you need to act, call the appropriate tool. "
+    "Prefer small, safe steps. Explain what you are doing briefly."
+)
 
 
 def _extract_query(messages: list[dict[str, Any]]) -> str | None:
@@ -180,6 +187,12 @@ async def chat_completions(
 ) -> Response:
     """Handle a chat completion request for `llmhell/coder`."""
     messages = body.get("messages") or []
+
+    # Tool mode: act as a coding agent backed directly by the LLM. The
+    # extension executes the tools locally and feeds the results back.
+    if body.get("tools"):
+        return await agent_chat(body, db=db, settings=settings, http_client=http_client)
+
     query = _extract_query(messages)
     if not query:
         return JSONResponse(
@@ -285,3 +298,111 @@ async def chat_completions(
         },
     }
     return JSONResponse(payload)
+
+
+def _prepare_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prepend the agent system prompt when there is no system message."""
+    if messages and messages[0].get("role") == "system":
+        return messages
+    return [{"role": "system", "content": AGENT_SYSTEM_PROMPT}, *messages]
+
+
+def _openai_completion_response(result: llm_chat.ChatResult, model: str) -> dict[str, Any]:
+    message: dict[str, Any] = {"role": "assistant", "content": result.content}
+    if result.tool_calls:
+        message["tool_calls"] = result.tool_calls
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": result.finish_reason or ("tool_calls" if result.tool_calls else "stop"),
+            }
+        ],
+        "usage": {
+            "prompt_tokens": result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "total_tokens": result.prompt_tokens + result.completion_tokens,
+        },
+    }
+
+
+async def _stream_agent(
+    endpoint: ModelEndpoint,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    http_client: httpx.AsyncClient,
+) -> AsyncIterator[bytes]:
+    """Pass through the upstream streaming deltas as OpenAI SSE."""
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
+    async for event in llm_chat.stream_deltas(
+        endpoint,
+        messages,
+        http_client=http_client,
+        max_tokens=4096,
+        temperature=0.2,
+        tools=tools,
+    ):
+        event.setdefault("id", chunk_id)
+        if "model" in event:
+            event["model"] = CODING_PROVIDER_MODEL_ID
+        yield f"data: {json.dumps(event)}\n\n".encode()
+    yield b"data: [DONE]\n\n"
+
+
+async def agent_chat(
+    body: dict[str, Any],
+    *,
+    db: AsyncSession,
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+) -> Response:
+    """Tool-enabled coding agent: direct LLM call, no search pipeline."""
+    messages = _prepare_messages(body.get("messages") or [])
+    tools = body.get("tools") or []
+    if not tools:
+        return JSONResponse(
+            {"error": {"message": "tools are required for agent chat", "type": "invalid_request"}},
+            status_code=400,
+        )
+
+    endpoint, _ = await _select_endpoints(db, settings)
+    if endpoint is None:
+        return JSONResponse(
+            {"error": {"message": "no answer model endpoint is registered", "type": "service_unavailable"}},
+            status_code=503,
+        )
+
+    stream = bool(body.get("stream", False))
+    if stream:
+        return StreamingResponse(
+            _stream_agent(endpoint, messages, tools, http_client),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    try:
+        result = await llm_chat.complete(
+            endpoint,
+            messages,
+            http_client=http_client,
+            max_tokens=4096,
+            temperature=0.2,
+            tools=tools,
+        )
+    except llm_chat.ChatError as exc:
+        logger.exception("agent chat failed")
+        return JSONResponse(
+            {"error": {"message": str(exc), "type": "upstream_error"}},
+            status_code=502,
+        )
+
+    return JSONResponse(_openai_completion_response(result, CODING_PROVIDER_MODEL_ID))

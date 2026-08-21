@@ -3,6 +3,7 @@
 // is happy either way; the test runner is not.
 import { parseCookies, readSetCookie, withScheme } from "./http.ts";
 import { type ServerEvent, SseParser } from "./sse.ts";
+import type { ToolDefinition } from "./tools.ts";
 import type { ChatTurn, Content, SearchHit, SearchResponse, Source } from "./types";
 
 /**
@@ -60,6 +61,13 @@ export interface SecretStore {
   get(key: string): Thenable<string | undefined>;
   store(key: string, value: string): Thenable<void>;
   delete(key: string): Thenable<void>;
+}
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string;
+  tool_call_id?: string;
+  tool_calls?: unknown[];
 }
 
 export class KnowledgeBaseClient {
@@ -176,6 +184,55 @@ export class KnowledgeBaseClient {
     } finally {
       // Releasing matters on an early return - a generator abandoned partway
       // through would otherwise hold the socket until it was collected.
+      reader.releaseLock();
+      if (!signal?.aborted) await body.cancel().catch(() => undefined);
+    }
+  }
+
+  /**
+   * OpenAI-compatible chat completions backed by the backend's coding provider.
+   *
+   * The extension signs in with a session cookie, so this hits the
+   * `/api/chat/completions` route rather than the API-key `/v1` proxy.
+   */
+  async *chatCompletionsStream(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+    tools?: ToolDefinition[],
+  ): AsyncGenerator<ServerEvent> {
+    const requestBody: Record<string, unknown> = {
+      model: "llmhell/coder",
+      stream: true,
+      messages,
+    };
+    if (tools?.length) {
+      requestBody.tools = tools;
+    }
+    const response = await this.authorised("POST", "/api/chat/completions", requestBody, {
+      accept: "text/event-stream",
+      signal,
+    });
+
+    const body = response.body;
+    if (!body) {
+      throw new ApiError("The server sent no stream to read.", response.status);
+    }
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const parser = new SseParser();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const event of parser.push(decoder.decode(value, { stream: true }))) {
+          yield event;
+        }
+      }
+      for (const event of parser.flush()) {
+        yield event;
+      }
+    } finally {
       reader.releaseLock();
       if (!signal?.aborted) await body.cancel().catch(() => undefined);
     }

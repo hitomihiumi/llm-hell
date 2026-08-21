@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { registerChatParticipant } from "./chat";
 import { ApiError, AuthError, KnowledgeBaseClient } from "./client";
+import { registerCoderParticipant } from "./coder";
 import { answerUri, applyLanguage, hitUri, KnowledgeBaseDocuments, SCHEME } from "./documents";
 import { answerMarkdown, collapse } from "./format";
 import { ResultsProvider } from "./resultsView";
@@ -62,12 +63,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const chat = registerChat(context, client, results, view);
   const hasChat = chat.length > 0;
 
+  const coderChat = registerCoder(context, client);
+
   /** Put a question in the chat box, addressed to the participant. */
   async function askInChat(question: string): Promise<void> {
     await vscode.commands.executeCommand("workbench.action.chat.open", {
       // A trailing space leaves the caret after the mention rather than
       // inside it, so typing continues the question.
       query: question ? `@kb ${question}` : "@kb ",
+    });
+  }
+
+  async function askInCoderChat(question: string): Promise<void> {
+    await vscode.commands.executeCommand("workbench.action.chat.open", {
+      query: question ? `@coder ${question}` : "@coder ",
     });
   }
 
@@ -82,7 +91,13 @@ export function activate(context: vscode.ExtensionContext): void {
     // down with it.
     ...chat,
 
+    // `@coder` uses the same backend RAG pipeline but speaks the OpenAI
+    // chat-completion format, so it can be used as a coding assistant.
+    ...coderChat,
+
     vscode.commands.registerCommand("knowledgeBase.openChat", () => askInChat("")),
+
+    vscode.commands.registerCommand("knowledgeBase.openCoderChat", () => askInCoderChat("")),
 
     vscode.commands.registerCommand("knowledgeBase.signIn", authenticate),
 
@@ -237,6 +252,28 @@ function registerChat(
     // A duplicate id or a manifest the editor did not accept. Worth a line in
     // the log; not worth taking the rest of the extension down.
     console.warn("knowledge base: chat participant not registered", error);
+    return [];
+  }
+}
+
+/**
+ * The coding assistant participant.
+ *
+ * Same guard as `registerChat`: if the editor has no chat API, this returns
+ * nothing instead of failing activation.
+ */
+function registerCoder(
+  context: vscode.ExtensionContext,
+  client: KnowledgeBaseClient,
+): vscode.Disposable[] {
+  if (!vscode.chat?.createChatParticipant) {
+    return [];
+  }
+  try {
+    const participant = registerCoderParticipant(context, client);
+    return [participant];
+  } catch (error) {
+    console.warn("knowledge base: coder participant not registered", error);
     return [];
   }
 }

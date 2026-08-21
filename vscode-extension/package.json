@@ -54,6 +54,11 @@
           "type": "boolean",
           "default": true,
           "description": "Pre-fill the search box with the editor selection, or with the symbol under the cursor when nothing is selected."
+        },
+        "knowledgeBase.coder.confirmTools": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask before @coder writes files or runs terminal commands."
         }
       }
     },
@@ -93,6 +98,12 @@
         "title": "Ask in Chat",
         "category": "Knowledge Base",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "knowledgeBase.openCoderChat",
+        "title": "Ask Coder",
+        "category": "Knowledge Base",
+        "icon": "$(code)"
       },
       {
         "command": "knowledgeBase.search",
@@ -213,6 +224,11 @@
         "command": "knowledgeBase.openChat",
         "key": "ctrl+alt+shift+k",
         "mac": "cmd+alt+shift+k"
+      },
+      {
+        "command": "knowledgeBase.openCoderChat",
+        "key": "ctrl+alt+shift+c",
+        "mac": "cmd+alt+shift+c"
       }
     ],
     "chatParticipants": [
@@ -228,6 +244,13 @@
             "description": "Results only - no answer, no tokens spent"
           }
         ]
+      },
+      {
+        "id": "knowledgeBase.coder",
+        "name": "coder",
+        "fullName": "Coder",
+        "description": "Coding assistant backed by the knowledge base",
+        "isSticky": true
       }
     ]
   },

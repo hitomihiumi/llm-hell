@@ -34,6 +34,7 @@ class ChatResult:
     finish_reason: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -50,12 +51,13 @@ def _url(endpoint: ModelEndpoint) -> str:
 
 def _body(
     endpoint: ModelEndpoint,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     max_tokens: int,
     temperature: float,
     stream: bool,
     extra: dict[str, Any] | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": endpoint.model_id,
@@ -68,6 +70,9 @@ def _body(
         # Without this the final chunk carries no usage block and token
         # counts for the answer call are silently zero.
         body["stream_options"] = {"include_usage": True}
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
     # Server-specific fields the caller needs, merged last so a caller can
     # override a default above. Used for `chat_template_kwargs`, which is how
     # a reasoning model is told not to think on a given request.
@@ -76,27 +81,29 @@ def _body(
     return body
 
 
-def _extract_message(payload: dict[str, Any]) -> tuple[str, str, str | None]:
+def _extract_message(payload: dict[str, Any]) -> tuple[str, str, str | None, list[dict[str, Any]]]:
     choices = payload.get("choices") or []
     if not choices:
-        return "", "", None
+        return "", "", None, []
     choice = choices[0]
     message = choice.get("message") or {}
     # Both spellings: vLLM 0.26 emits "reasoning", older builds
     # "reasoning_content". Reading one silently loses the other.
     reasoning = message.get("reasoning") or message.get("reasoning_content") or ""
-    return message.get("content") or "", reasoning, choice.get("finish_reason")
+    tool_calls = message.get("tool_calls") or []
+    return message.get("content") or "", reasoning, choice.get("finish_reason"), tool_calls
 
 
 async def complete(
     endpoint: ModelEndpoint,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     http_client: httpx.AsyncClient,
     max_tokens: int = 1024,
     temperature: float = 0.2,
     timeout: float = 120.0,
     extra_body: dict[str, Any] | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> ChatResult:
     """One non-streaming completion."""
 
@@ -111,6 +118,7 @@ async def complete(
                     temperature=temperature,
                     stream=False,
                     extra=extra,
+                    tools=tools,
                 ),
                 headers=_headers(endpoint),
                 timeout=timeout,
@@ -143,7 +151,7 @@ async def complete(
     except (json.JSONDecodeError, ValueError) as exc:
         raise ChatError(f"{endpoint.model_id} returned non-JSON: {response.text[:300]}") from exc
 
-    content, reasoning, finish_reason = _extract_message(payload)
+    content, reasoning, finish_reason, tool_calls = _extract_message(payload)
     usage = payload.get("usage") or {}
     return ChatResult(
         content=content,
@@ -151,18 +159,20 @@ async def complete(
         finish_reason=finish_reason,
         prompt_tokens=usage.get("prompt_tokens") or 0,
         completion_tokens=usage.get("completion_tokens") or 0,
+        tool_calls=tool_calls,
         raw=payload,
     )
 
 
 async def stream_deltas(
     endpoint: ModelEndpoint,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     http_client: httpx.AsyncClient,
     max_tokens: int = 1024,
     temperature: float = 0.2,
     timeout: float = 300.0,
+    tools: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield each parsed SSE event from a streaming completion.
 
@@ -174,7 +184,7 @@ async def stream_deltas(
     request = http_client.build_request(
         "POST",
         _url(endpoint),
-        json=_body(endpoint, messages, max_tokens=max_tokens, temperature=temperature, stream=True),
+        json=_body(endpoint, messages, max_tokens=max_tokens, temperature=temperature, stream=True, tools=tools),
         headers=_headers(endpoint),
         timeout=timeout,
     )

@@ -78,6 +78,18 @@ before(async () => {
       send(200, { query_id: "q1", query: "x", queries: [], hits: [], source_status: [] });
       return;
     }
+    if (path === "/api/chat/completions") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"delta":{"content":"hello"}}]}\n\n',
+      );
+      response.write(
+        'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      );
+      response.write("data: [DONE]\n\n");
+      response.end();
+      return;
+    }
     if (path === "/api/sources") {
       send(200, [{ key: "gitlab", display_name: "GitLab", enabled: true }]);
       return;
@@ -144,6 +156,26 @@ test("a GET is not given a CSRF header, which the API does not want", async () =
 
   const sources = seen.find((request) => request.path === "/api/sources");
   assert.equal(sources?.csrf, "");
+});
+
+test("chat completions sends the session cookie and CSRF token", async () => {
+  fresh();
+  const kb = client(PASSWORD);
+
+  const events = [];
+  for await (const event of kb.chatCompletionsStream([{ role: "user", content: "hi" }])) {
+    events.push(event);
+  }
+
+  const request = seen.find((request) => request.path === "/api/chat/completions");
+  assert.ok(request);
+  assert.equal(request.method, "POST");
+  assert.ok(request.cookie.includes("kb_session=session-value"));
+  assert.equal(request.csrf, "csrf-value");
+
+  assert.equal(events.length, 3);
+  const first = events[0].data as { choices?: [{ delta?: { content?: string } }] };
+  assert.equal(first.choices?.[0]?.delta?.content, "hello");
 });
 
 test("a stored password signs in on the first request, with nothing asked", async () => {

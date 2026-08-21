@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,8 @@ from app.schemas.search import (
     SearchRequest,
     SearchResponse,
 )
+from app.services.llm.coding_provider import CODING_PROVIDER_MODEL_ID
+from app.services.llm.coding_provider import chat_completions as coding_chat_completions
 from app.services.mcp.connector import SearchContext
 from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.registry import McpRegistry, get_mcp_registry
@@ -352,6 +354,32 @@ async def search_stream(
             # stream into one delivery at the end.
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post("/chat/completions")
+async def chat_completions(
+    request: Request,
+    current: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    registry: McpRegistry = Depends(get_mcp_registry),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+) -> Response:
+    """Session-authenticated OpenAI-compatible chat completions.
+
+    The extension is already signed in with a cookie, so this exposes the
+    backend's coding provider (`llmhell/coder`) without asking the user for an
+    API key.
+    """
+    body = await request.json()
+    body.setdefault("model", CODING_PROVIDER_MODEL_ID)
+    return await coding_chat_completions(
+        body,
+        db=db,
+        user=current,
+        settings=get_settings(),
+        registry=registry,
+        http_client=http_client,
     )
 
 
