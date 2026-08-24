@@ -81,6 +81,10 @@ export interface Copy {
     hideText: string;
     kinds: Record<string, string>;
   };
+  sourceFilter: {
+    all: string;
+    onlyTitle: (source: string) => string;
+  };
   badge: {
     hits: string[];
     unavailable: string;
@@ -88,6 +92,8 @@ export interface Copy {
     fallback: string;
     fallbackTitle: string;
     generatedSql: string;
+    cited: string;
+    citedTitle: string;
   };
   viewer: {
     pages: (count: number) => string;
@@ -203,6 +209,10 @@ const en: Copy = {
       unknown: "Item",
     },
   },
+  sourceFilter: {
+    all: "All sources",
+    onlyTitle: (source) => `Show only ${source}`,
+  },
   badge: {
     hits: ["hit", "hits"],
     unavailable: "unavailable",
@@ -211,6 +221,8 @@ const en: Copy = {
     fallbackTitle:
       "The model did not produce usable SQL, so a deterministic keyword query was used instead.",
     generatedSql: "Generated SQL",
+    cited: "cited",
+    citedTitle: "The answer actually cites a result from this source.",
   },
   viewer: {
     pages: (count) => `${count} page${count === 1 ? "" : "s"} the answer read`,
@@ -327,6 +339,10 @@ const uk: Copy = {
       unknown: "Об'єкт",
     },
   },
+  sourceFilter: {
+    all: "Усі джерела",
+    onlyTitle: (source) => `Показати лише ${source}`,
+  },
   badge: {
     hits: ["збіг", "збіги", "збігів"],
     unavailable: "недоступне",
@@ -335,6 +351,8 @@ const uk: Copy = {
     fallbackTitle:
       "Модель не видала придатного SQL, тому виконано детермінований пошук за ключовими словами.",
     generatedSql: "Згенерований SQL",
+    cited: "використано",
+    citedTitle: "Відповідь справді цитує результат із цього джерела.",
   },
   viewer: {
     pages: (count) => `${count} сторінок, які читала відповідь`,

@@ -14,8 +14,27 @@ import { cn } from "@/lib/utils";
  * separation — with the status carried by a small square rather than by
  * colouring the whole chip, so a failed source does not shout over the
  * results themselves.
+ *
+ * Doubles as a filter chip when `onToggleFilter` is given: a source that
+ * actually returned something becomes clickable, and clicking it narrows the
+ * result list below to that source alone. A source with nothing to show has
+ * nothing to filter to, so it stays informational rather than becoming a
+ * button that does nothing.
  */
-export function SourceBadge({ status }: { status: SourceStatus }) {
+export function SourceBadge({
+  status,
+  cited = false,
+  selected = false,
+  onToggleFilter,
+}: {
+  status: SourceStatus;
+  /** Whether the answer actually cited a result from this source. */
+  cited?: boolean;
+  /** Whether this is the source the result list is currently narrowed to. */
+  selected?: boolean;
+  /** Present only for a source worth filtering to - one with hits. */
+  onToggleFilter?: () => void;
+}) {
   const { copy, plural } = useCopy();
   const [open, setOpen] = useState(false);
   const sql = typeof status.detail?.sql === "string" ? status.detail.sql : null;
@@ -24,47 +43,72 @@ export function SourceBadge({ status }: { status: SourceStatus }) {
   const warning =
     typeof status.detail?.warning === "string" ? status.detail.warning : null;
   const expandable = Boolean(status.error || sql || warning);
+  const filterable = Boolean(onToggleFilter);
+
+  const label = status.display_name || status.source;
+
+  const dot = (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "h-1.5 w-1.5",
+        !status.ok
+          ? "bg-danger"
+          : status.degraded
+            ? "bg-accent"
+            : "bg-white/40",
+      )}
+    />
+  );
+
+  const outcome = status.ok ? (
+    // A template literal, not adjacent JSX text: the line-wrapped form of
+    // the latter puts a newline between {elapsed_ms} and the literal "ms",
+    // and JSX turns that into a rendered space - "120 ms" instead of "120ms".
+    <span className="text-white/35">
+      {`${status.hits} ${plural(status.hits, copy.badge.hits)} · ${status.elapsed_ms}ms`}
+    </span>
+  ) : (
+    <span className="text-danger">{copy.badge.unavailable}</span>
+  );
 
   return (
     <div
       className={cn(
         "border border-hairline transition-colors duration-300",
         !status.ok && "border-danger/40",
+        selected && "border-white/60",
       )}
     >
-      <button
-        type="button"
-        onClick={() => expandable && setOpen(!open)}
-        aria-expanded={expandable ? open : undefined}
-        className={cn(
-          "flex items-center gap-3 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em]",
-          expandable ? "cursor-pointer" : "cursor-default",
-        )}
-      >
-        <span
-          aria-hidden="true"
-          className={cn(
-            "h-1.5 w-1.5",
-            !status.ok
-              ? "bg-danger"
-              : status.degraded
-                ? "bg-accent"
-                : "bg-white/40",
-          )}
-        />
-        <span className="text-white/80">
-          {status.display_name || status.source}
-        </span>
-
-        {status.ok ? (
-          <span className="text-white/35">
-            {status.hits} {plural(status.hits, copy.badge.hits)} ·{" "}
-            {status.elapsed_ms}ms
-          </span>
+      <div className="flex items-center gap-3 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.2em]">
+        {filterable ? (
+          <button
+            type="button"
+            onClick={onToggleFilter}
+            aria-pressed={selected}
+            title={copy.sourceFilter.onlyTitle(label)}
+            className={cn(
+              "flex items-center gap-3 transition-colors duration-300",
+              selected ? "text-white" : "text-white/80 hover:text-white",
+            )}
+          >
+            {dot}
+            <span>{label}</span>
+            {outcome}
+          </button>
         ) : (
-          <span className="text-danger">{copy.badge.unavailable}</span>
+          <div className="flex items-center gap-3 text-white/80">
+            {dot}
+            <span>{label}</span>
+            {outcome}
+          </div>
         )}
 
+        {cited && (
+          <span className="text-white/50" title={copy.badge.citedTitle}>
+            {copy.badge.cited}
+          </span>
+        )}
         {status.degraded && (
           <span className="text-accent">{copy.badge.partial}</span>
         )}
@@ -73,12 +117,18 @@ export function SourceBadge({ status }: { status: SourceStatus }) {
             {copy.badge.fallback}
           </span>
         )}
+
         {expandable && (
-          <span aria-hidden="true" className="text-white/30">
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            aria-expanded={open}
+            className="ml-auto cursor-pointer text-white/30 hover:text-white/60"
+          >
             {open ? "−" : "+"}
-          </span>
+          </button>
         )}
-      </button>
+      </div>
 
       {open && (
         <div className="space-y-3 border-t border-hairline px-3 py-3">

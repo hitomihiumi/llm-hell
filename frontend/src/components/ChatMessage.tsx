@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AnswerMarkdown } from "@/components/AnswerMarkdown";
 import { jumpToHit } from "@/components/CitedText";
 import { ResultCard } from "@/components/ResultCard";
@@ -13,6 +13,10 @@ export function ChatMessage({ run }: { run: SearchRun }) {
   const { copy, plural } = useCopy();
   const [showSources, setShowSources] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
+  // Which source's hits the list below is narrowed to, or null for all of
+  // them. Reset whenever the run itself changes - a filter chosen for one
+  // question has nothing to do with the next one's sources.
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null);
 
   function jump(citation: Citation) {
     // The sources panel is collapsed by default in this layout, so a
@@ -22,6 +26,19 @@ export function ChatMessage({ run }: { run: SearchRun }) {
   }
 
   const failing = run.status.filter((entry) => !entry.ok);
+
+  // Which sources the answer actually leaned on, as opposed to every source
+  // that merely returned something. A search can hit four sources and cite
+  // one - showing all four as equals hides which one the answer is actually
+  // standing on.
+  const citedSources = useMemo(
+    () => new Set(run.citations.map((citation) => citation.source)),
+    [run.citations],
+  );
+
+  const visibleHits = sourceFilter
+    ? run.hits.filter((hit) => hit.source === sourceFilter)
+    : run.hits;
 
   return (
     <article className="border-t border-hairline pt-8">
@@ -104,15 +121,42 @@ export function ChatMessage({ run }: { run: SearchRun }) {
             {showSources && (
               <div className="mt-4 space-y-4">
                 {run.status.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {run.status.map((entry) => (
-                      <SourceBadge key={entry.source} status={entry} />
+                      <SourceBadge
+                        key={entry.source}
+                        status={entry}
+                        cited={citedSources.has(entry.source)}
+                        selected={sourceFilter === entry.source}
+                        // Only a source with something in it is worth
+                        // filtering to - one with zero hits has nothing to
+                        // narrow the list down to.
+                        onToggleFilter={
+                          entry.ok && entry.hits > 0
+                            ? () =>
+                                setSourceFilter((current) =>
+                                  current === entry.source
+                                    ? null
+                                    : entry.source,
+                                )
+                            : undefined
+                        }
+                      />
                     ))}
+                    {sourceFilter && (
+                      <button
+                        type="button"
+                        onClick={() => setSourceFilter(null)}
+                        className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/40 underline decoration-white/20 underline-offset-4 transition-colors duration-300 hover:text-white"
+                      >
+                        {copy.sourceFilter.all}
+                      </button>
+                    )}
                   </div>
                 )}
-                {run.hits.length > 0 && (
+                {visibleHits.length > 0 && (
                   <ol className="space-y-3">
-                    {run.hits.map((hit, index) => (
+                    {visibleHits.map((hit, index) => (
                       <ResultCard key={hit.id} hit={hit} index={index + 1} />
                     ))}
                   </ol>
