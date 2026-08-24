@@ -873,21 +873,38 @@ class GoogleWorkspaceConnector:
                 "url": None,
                 "message": f"{email} is already connected - {len(account.get('scopes', []))} scopes granted.",
             }
-        return {
-            "authenticated": False,
-            "url": None,
-            "message": (
-                f"Google has no working credentials for {email}.\n\n"
-                "This server cannot run the consent flow itself: its authenticate "
-                "operation opens a browser and waits for a local callback, which a "
-                "container has neither of. Add the account where a browser exists:\n\n"
-                "  docker compose exec google-mcp node /usr/local/lib/node_modules/"
-                "@aaronsb/google-workspace-mcp/build/index.js\n\n"
-                "or follow docs/google-workspace-setup.md, which covers the same "
-                "procedure for the first account. Once the account appears, connect "
-                "it here and searches will run as it."
-            ),
-        }
+
+        # The previous message here pointed at `docker compose exec google-mcp
+        # node .../build/index.js`, which fails two ways at once: it starts
+        # the bare MCP stdio server with nothing driving it, and even driven
+        # it would try to open a browser inside a container with no display -
+        # the exact failure this method exists to route around. The window
+        # has to open somewhere a window CAN open, which is the workstation,
+        # not the server.
+        missing_credentials = not (self._settings.google_client_id and self._settings.google_client_secret)
+        lines = [
+            f"Google has no working credentials for {email}.",
+            "",
+            "The consent window can only open on a machine with a display, so this",
+            "has to run on your own workstation, not inside a container:",
+            "",
+            "  npm install -g @aaronsb/google-workspace-mcp",
+            "  GOOGLE_CLIENT_ID=<id> GOOGLE_CLIENT_SECRET=<secret> \\",
+            "    npx -y @modelcontextprotocol/inspector google-workspace-mcp",
+            "",
+            f'Then call manage_accounts: {{"operation": "authenticate", "email": "{email}", "category": "work"}}.',
+            "A browser window opens on THAT machine for consent. Full steps, including",
+            "the OAuth client setup, are in docs/google-workspace-setup.md.",
+            "",
+            "Once the account appears there, connect it here and searches run as it.",
+        ]
+        if missing_credentials:
+            lines.insert(
+                2,
+                "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set on this server either - "
+                "step 1 of that doc creates them, before any of this can work.",
+            )
+        return {"authenticated": False, "url": None, "message": chr(10).join(lines)}
 
     async def account_status(self, email: str) -> dict[str, Any]:
         """Whether the server holds working credentials for an address.

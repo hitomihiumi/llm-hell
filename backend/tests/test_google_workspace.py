@@ -310,3 +310,60 @@ def test_the_granted_scopes_are_read():
 
 def test_an_account_with_no_scopes_has_none_rather_than_a_placeholder():
     assert _scopes(NEVER_CONNECTED) == []
+
+
+# --- begin_account_auth: the message a user actually gets ---------------------
+#
+# The bug this replaced: the message pointed at
+# `docker compose exec google-mcp node .../build/index.js`, which cannot open
+# a window - it starts a bare MCP stdio server with nothing driving it, inside
+# a container with no display. Both assertions below exist because of that:
+# the broken command must never come back, and the real one must.
+
+
+@pytest.mark.asyncio
+async def test_an_unauthenticated_account_is_pointed_at_a_machine_that_has_a_display(monkeypatch):
+    connector = GoogleWorkspaceConnector(None, Settings(), key=SOURCE_GOOGLE_DRIVE)
+
+    async def account_status(_email):
+        return {"authenticated": False, "message": "not connected", "scopes": []}
+
+    monkeypatch.setattr(connector, "account_status", account_status)
+
+    result = await connector.begin_account_auth("nobody@example.com")
+
+    assert result["authenticated"] is False
+    assert "docker compose exec google-mcp" not in result["message"]
+    assert "npx -y @modelcontextprotocol/inspector google-workspace-mcp" in result["message"]
+    assert "nobody@example.com" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_missing_oauth_credentials_are_called_out_before_anything_else(monkeypatch):
+    """Running the workstation flow with no client id/secret fails at a
+    later, more confusing step. Saying so here is a step earlier."""
+    connector = GoogleWorkspaceConnector(None, Settings(google_client_id="", google_client_secret=""), key=SOURCE_GOOGLE_DRIVE)
+
+    async def account_status(_email):
+        return {"authenticated": False, "message": "not connected", "scopes": []}
+
+    monkeypatch.setattr(connector, "account_status", account_status)
+
+    result = await connector.begin_account_auth("nobody@example.com")
+
+    assert "GOOGLE_CLIENT_ID" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_an_already_authenticated_account_is_not_asked_to_reconnect(monkeypatch):
+    connector = GoogleWorkspaceConnector(None, Settings(), key=SOURCE_GOOGLE_DRIVE)
+
+    async def account_status(_email):
+        return {"authenticated": True, "message": "ok", "scopes": ["drive", "gmail.modify"]}
+
+    monkeypatch.setattr(connector, "account_status", account_status)
+
+    result = await connector.begin_account_auth("vlad@borzo.ai")
+
+    assert result["authenticated"] is True
+    assert "vlad@borzo.ai" in result["message"]
