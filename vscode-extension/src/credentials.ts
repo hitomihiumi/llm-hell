@@ -90,7 +90,7 @@ export async function manageCredentials(client: KnowledgeBaseClient): Promise<vo
     if (action !== "Reconnect") return;
   }
 
-  if (chosen.status.provider === "gitlab") await connectGitLab(client);
+  if (chosen.status.provider === "gitlab") await connectGitLab(client, chosen.status);
   else await connectGoogle(client);
 }
 
@@ -101,7 +101,10 @@ export async function manageCredentials(client: KnowledgeBaseClient): Promise<vo
  * screen share, and `ignoreFocusOut` because getting it means leaving the
  * editor for GitLab's settings page and coming back.
  */
-export async function connectGitLab(client: KnowledgeBaseClient): Promise<boolean> {
+export async function connectGitLab(
+  client: KnowledgeBaseClient,
+  status?: CredentialStatus,
+): Promise<boolean> {
   const open = "Open GitLab settings";
   const paste = "I have a token";
   const first = await vscode.window.showInformationMessage(
@@ -112,10 +115,15 @@ export async function connectGitLab(client: KnowledgeBaseClient): Promise<boolea
   );
   if (!first) return false;
   if (first === open) {
+    // The server's own configured URL, not a remembered port - a local dev
+    // GitLab's port drifts on every container restart, and a stale default
+    // here would send this at a page that no longer exists.
+    const serverUrl = status?.detail?.server_web_url;
     const base = await vscode.window.showInputBox({
       title: "GitLab",
       prompt: "Your GitLab URL",
-      value: "http://localhost:32772",
+      value: typeof serverUrl === "string" && serverUrl ? serverUrl : undefined,
+      placeHolder: "http://gitlab.example.com",
       ignoreFocusOut: true,
     });
     if (!base) return false;

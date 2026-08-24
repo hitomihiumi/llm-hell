@@ -29,3 +29,17 @@ def test_the_full_text_tool_is_offered_as_the_alternative_to_a_shell_command():
 
 def test_a_genuine_empty_result_is_reported_rather_than_worked_around():
     assert "Do not fall back to a shell command" in AGENT_SYSTEM_PROMPT
+
+
+def test_the_answer_stays_in_the_users_own_language():
+    """A Ukrainian question got a full-length answer entirely in Russian - not
+    from quoting a Russian source (the actual source README was plain
+    English), and not a drift mid-reply, but DeepSeek choosing Russian as the
+    target language for the whole translation outright. A single generic
+    sentence about matching the user's language was not enough to override
+    that; this pins the stronger, Ukrainian/Russian-specific version with
+    concrete word pairs that replaced it."""
+    assert "the wrong default here is Russian" in AGENT_SYSTEM_PROMPT
+    assert "застосунок not " in AGENT_SYSTEM_PROMPT
+    assert "приложение" in AGENT_SYSTEM_PROMPT
+    assert "translate the whole thing rather than leaving parts of it in the source language" in AGENT_SYSTEM_PROMPT

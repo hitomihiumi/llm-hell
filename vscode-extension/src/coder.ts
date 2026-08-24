@@ -24,7 +24,7 @@ import { executeTool, TOOLS, type ToolCall } from "./tools";
 
 export const PARTICIPANT_ID = "knowledgeBase.coder";
 
-const MAX_AGENT_TURNS = 10;
+const MAX_AGENT_TURNS = 100;
 
 interface AgentTurn {
   content: string;

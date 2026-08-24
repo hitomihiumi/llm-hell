@@ -306,6 +306,15 @@ export class KnowledgeBaseChatPanel {
     for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
       if (signal.aborted) return;
 
+      // Each round's own narration is a separate thought, cut off wherever
+      // the model decided to call a tool rather than at a sentence boundary.
+      // Run it straight into the previous round's text and two unrelated
+      // sentences read as one - so a fresh paragraph starts here, once, before
+      // this round's deltas begin arriving.
+      if (turn > 0 && assistant.text && !assistant.text.endsWith("\n")) {
+        assistant.text += "\n\n";
+      }
+
       const aggregator = new ToolCallAggregator();
       let content = "";
       for await (const event of this.client.chatCompletionsStream(messages, signal, TOOLS)) {

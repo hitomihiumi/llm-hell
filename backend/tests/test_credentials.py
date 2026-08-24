@@ -221,6 +221,19 @@ async def test_status_says_who_the_credential_speaks_for(db, user):
 
 
 @pytest.mark.asyncio
+async def test_status_carries_the_servers_own_gitlab_url(db, user):
+    """A local dev GitLab's port drifts on every container restart. The
+    extension's "authorization window" prefills from this rather than a
+    remembered value, so it never points at a URL that no longer exists."""
+    report = await credential_service.status(
+        db, user=user, settings=settings(gitlab_web_url="http://localhost:32769")
+    )
+
+    entry = next(item for item in report if item["provider"] == "gitlab")
+    assert entry["detail"]["server_web_url"] == "http://localhost:32769"
+
+
+@pytest.mark.asyncio
 async def test_status_says_when_storage_is_switched_off(db, user):
     """The interface needs it to explain why connecting does nothing, rather
     than showing a button that silently fails."""

@@ -117,11 +117,17 @@ async def status(db: AsyncSession, *, user: User, settings: Settings) -> list[di
             "account": row.account if row else None,
             "expires_at": row.expires_at if row else None,
             "last_verified_at": row.last_verified_at if row else None,
-            "detail": row.detail if row else {},
+            "detail": dict(row.detail) if row else {},
             # Said per provider rather than once, so the interface can explain
             # why a connect button does nothing without a second request.
             "storage_available": enabled,
         }
+        if provider == "gitlab":
+            # The instance to send someone to for a token, read live rather
+            # than typed into the extension - a local dev instance's port
+            # drifts on every container restart, and a stale one here sends
+            # the "authorization window" to a dead page.
+            entry["detail"]["server_web_url"] = settings.gitlab_web_url
         if row is not None and row.expires_at is not None:
             expires_at = row.expires_at
             if expires_at.tzinfo is None:
