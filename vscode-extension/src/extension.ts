@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { registerChatParticipant } from "./chat";
+import { KnowledgeBaseChatPanel } from "./chatPanel";
 import { ApiError, AuthError, KnowledgeBaseClient } from "./client";
 import { registerCoderParticipant } from "./coder";
 import { manageCredentials, offerMissing } from "./credentials";
@@ -107,6 +108,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("knowledgeBase.accounts", () => manageCredentials(client)),
 
     vscode.commands.registerCommand("knowledgeBase.openCoderChat", () => askInCoderChat("")),
+
+    vscode.commands.registerCommand("knowledgeBase.openCustomChat", () => {
+      KnowledgeBaseChatPanel.createOrShow(context, client, documents, () => {
+        const settings = readSettings();
+        return {
+          sources: context.workspaceState.get<string[]>(SOURCES_KEY) ?? settings.sources,
+          limit: settings.limit,
+        };
+      });
+    }),
 
     vscode.commands.registerCommand("knowledgeBase.signIn", authenticate),
 
@@ -427,7 +438,7 @@ async function openHit(
   try {
     const content = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Window, title: `Opening ${hit.title}` },
-      () => client.content(hit),
+      () => client.content(hit.id),
     );
     const body = content.truncated
       ? `${content.text}\n\n[truncated — open the source for the rest]`

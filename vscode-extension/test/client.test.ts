@@ -94,6 +94,17 @@ before(async () => {
       send(200, [{ key: "gitlab", display_name: "GitLab", enabled: true }]);
       return;
     }
+    if (path === "/api/content/gitlab%3Acode%3A3") {
+      send(200, {
+        hit_id: "gitlab:code:3",
+        title: "main.go",
+        text: "package main",
+        language: "go",
+        truncated: false,
+        preview_pages: 0,
+      });
+      return;
+    }
     send(404, { detail: "nothing to show for this result" });
   });
 
@@ -215,25 +226,23 @@ test("no stored password is an auth error, not a crash", async () => {
   await assert.rejects(() => kb.sources(), AuthError);
 });
 
+test("content(id) fetches by a bare id, colon and all", async () => {
+  /* read_knowledge_base_result only ever has an id string from a prior
+     search - never a whole SearchHit - so this has to work from that alone. */
+  fresh();
+  const kb = client(PASSWORD);
+
+  const content = await kb.content("gitlab:code:3");
+
+  assert.equal(content.text, "package main");
+});
+
 test("a result with nothing to show surfaces its status, so the caller can fall back", async () => {
   fresh();
   const kb = client(PASSWORD);
 
   await assert.rejects(
-    () =>
-      kb.content({
-        id: "google_mail:m1",
-        source: "google_mail",
-        kind: "email",
-        title: "note",
-        snippet: "",
-        url: null,
-        author: null,
-        timestamp: null,
-        preview_pages: null,
-        rank_in_source: 0,
-        score: 0,
-      }),
+    () => kb.content("google_mail:m1"),
     (error: unknown) => error instanceof ApiError && error.status === 404,
   );
 });

@@ -35,10 +35,38 @@ logger = logging.getLogger("llmhell.coding_provider")
 
 CODING_PROVIDER_MODEL_ID = "llmhell/coder"
 
-AGENT_SYSTEM_PROMPT = (
-    "You are a helpful coding assistant. You can read and write files in the user's workspace "
-    "and run commands in their terminal. When you need to act, call the appropriate tool. "
-    "Prefer small, safe steps. Explain what you are doing briefly."
+# A tool call is the only channel this agent has for anything outside the
+# open workspace, and that sentence is doing real work: the local tools
+# include a terminal, and a terminal can reach GitLab or Google directly -
+# git clone, curl, gh, glab - with no credential of its own and no route
+# through the tokens the user actually connected. Measured: an agent with a
+# working search_knowledge_base tool still tried gh repo view after one
+# search came back thin, and the shell command failed anyway because it has
+# no GitLab auth. The prompt now says not to before that happens, rather
+# than relying on the tool failing usefully when it does.
+#
+# Built by joining paragraphs on a blank line rather than writing escaped
+# newlines directly - note the blank line between every pair of sentences
+# below, which is what makes them read as separate paragraphs once the
+# model receives this as a system message.
+AGENT_SYSTEM_PROMPT = (chr(10) * 2).join(
+    [
+        "You are a coding assistant working in the user's own editor. You can read and "
+        "write files in their workspace, run commands in their terminal, and search the "
+        "team's Google Workspace, GitLab and internal knowledge base with "
+        "search_knowledge_base.",
+        "The terminal has no access to GitLab, Google Drive or Gmail - it cannot see the "
+        "user's credentials for them, and a command like git clone, curl, gh or glab aimed "
+        "at those services will simply fail. search_knowledge_base is the only way to reach "
+        "them, and it already runs as the signed-in user.",
+        "search_knowledge_base returns short excerpts, not a document's full text. When one "
+        "result looks like the answer but the excerpt is not enough - a README you need in "
+        "full, a file whose entire content matters - call read_knowledge_base_result with "
+        "that result's id rather than reaching for the terminal.",
+        "If a search genuinely finds nothing, say so. Do not fall back to a shell command "
+        "aimed at an external service to work around it.",
+        "Prefer small, safe steps. Explain what you are doing briefly.",
+    ]
 )
 
 

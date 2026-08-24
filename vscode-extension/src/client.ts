@@ -9,7 +9,6 @@ import type {
   Content,
   CredentialStatus,
   GoogleAuthStart,
-  SearchHit,
   SearchResponse,
   Source,
 } from "./types";
@@ -246,10 +245,17 @@ export class KnowledgeBaseClient {
     }
   }
 
-  async content(hit: SearchHit): Promise<Content> {
+  /**
+   * The full text behind a result, by its id.
+   *
+   * Takes the bare id rather than a whole SearchHit, so anything holding on
+   * to just the id from an earlier search - a tool result the model is
+   * replying to two turns later, say - can still open it.
+   */
+  async content(id: string): Promise<Content> {
     // The id carries a colon (`google_drive:1AbC…`) and the route matches it
     // as a path, so each segment is encoded but the separators are kept.
-    const path = hit.id.split("/").map(encodeURIComponent).join("/");
+    const path = id.split("/").map(encodeURIComponent).join("/");
     return this.json<Content>("GET", `/api/content/${path}`);
   }
 

@@ -100,6 +100,7 @@ test("a long command output is capped like any other tool result", () => {
 // --- search results ------------------------------------------------------------
 
 const HIT = {
+  id: "gitlab:code:3",
   title: "services/auth/main.go",
   source: "gitlab",
   url: "https://gitlab.example.com/auth/-/blob/main/main.go",
@@ -113,6 +114,15 @@ test("a result carries where it came from on the same line as its title", () => 
   assert.ok(text.includes("[1] services/auth/main.go"));
   assert.ok(text.includes("gitlab"));
   assert.ok(text.includes("https://gitlab.example.com"));
+});
+
+test("a result carries its id, so a follow-up read can target it", () => {
+  /* Without this an agent that wants a result's full text has nothing to
+     hand read_knowledge_base_result, and reaches for a shell command
+     instead - the failure this exists to close off. */
+  const text = formatSearchResults([HIT]);
+
+  assert.ok(text.includes("id: gitlab:code:3"));
 });
 
 test("a result with no permalink still lists its source", () => {

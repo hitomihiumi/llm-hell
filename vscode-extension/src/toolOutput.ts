@@ -90,6 +90,8 @@ export function commandResult(
 
 /** The shape `search_knowledge_base` reports back, as much of it as matters. */
 export interface SearchResultLine {
+  /** What read_knowledge_base_result takes to fetch this result in full. */
+  id: string;
   title: string;
   source: string;
   url: string | null;
@@ -102,7 +104,10 @@ export interface SearchResultLine {
  * Written for the agent rather than for a person: the source and the link are
  * on the same line as the title so a claim can be attributed without a second
  * lookup, and each snippet is bounded so one long transcription cannot crowd
- * out the other nine results.
+ * out the other nine results. The id is printed too - without it, an agent
+ * that wants a result’s full text has nothing to hand read_knowledge_base_result
+ * and reaches for a shell command instead, which is the failure this exists
+ * to close off.
  */
 export function formatSearchResults(hits: SearchResultLine[], perHit = 800): string {
   if (!hits.length) {
@@ -113,7 +118,7 @@ export function formatSearchResults(hits: SearchResultLine[], perHit = 800): str
   const blocks = hits.map((hit, index) => {
     const where = hit.url ? `${hit.source} — ${hit.url}` : hit.source;
     const body = hit.snippet.trim();
-    return `[${index + 1}] ${hit.title}\n    ${where}\n${body ? truncate(body, perHit) : "    (no excerpt)"}`;
+    return `[${index + 1}] ${hit.title} (id: ${hit.id})\n    ${where}\n${body ? truncate(body, perHit) : "    (no excerpt)"}`;
   });
   return truncate(blocks.join("\n\n"));
 }

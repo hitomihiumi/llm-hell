@@ -1,7 +1,7 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
-import type { KnowledgeBaseClient } from "./client";
+import { ApiError, type KnowledgeBaseClient } from "./client";
 import {
   COMMAND_TIMEOUT_MS,
   commandResult,
@@ -92,7 +92,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: "search_knowledge_base",
       description:
-        "Search the team's Google Drive, Gmail, GitLab and internal knowledge base. Use this for anything not in the open workspace: design decisions, datasheets, schedules, other repositories, past discussion.",
+        "Search the team's Google Drive, Gmail, GitLab and internal knowledge base. Use this for anything not in the open workspace: design decisions, datasheets, schedules, other repositories, past discussion. Returns a short excerpt of each result, with its id - call read_knowledge_base_result with that id to read one in full.",
       parameters: {
         type: "object",
         properties: {
@@ -108,8 +108,27 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "read_knowledge_base_result",
+      description:
+        "Read one search_knowledge_base result in full, by the id it printed. Use this instead of a shell command when an excerpt is not enough - a README you need whole, a file whose entire content matters.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description: "The id printed next to a result by search_knowledge_base",
+          },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "run_terminal",
-      description: "Run a shell command in the workspace and return its output.",
+      description:
+        "Run a shell command in the workspace and return its output. This has no access to GitLab, Google Drive or Gmail credentials - use search_knowledge_base and read_knowledge_base_result for those instead of git, curl, gh or glab.",
       parameters: {
         type: "object",
         properties: {
@@ -165,6 +184,26 @@ export async function executeTool(call: ToolCall, client: KnowledgeBaseClient): 
         return formatSearchResults(response.hits);
       } catch (error) {
         return `Error searching the knowledge base: ${(error as Error).message}`;
+      }
+    }
+    case "read_knowledge_base_result": {
+      const id = String(args.id ?? "").trim();
+      if (!id) return "Error: no id provided.";
+      try {
+        const content = await client.content(id);
+        const body = content.truncated
+          ? `${content.text}\n\n[truncated — the source has more than this]`
+          : content.text;
+        return truncate(body || "[nothing more to read for this result]");
+      } catch (error) {
+        // A source with no extra content beyond its search excerpt answers
+        // 404 - Gmail's search already returns the message body, for
+        // instance. That is a fact about the result, not a broken tool, so
+        // it is worth saying plainly rather than as a generic error.
+        if (error instanceof ApiError && error.status === 404) {
+          return "This result has nothing more to read beyond its search excerpt.";
+        }
+        return `Error reading that result: ${(error as Error).message}`;
       }
     }
     case "read_file": {
