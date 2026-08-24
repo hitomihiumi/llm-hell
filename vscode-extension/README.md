@@ -81,6 +81,39 @@ quiet mid-task.
 
 ---
 
+## A dedicated tab, styled like the editor
+
+`@kb` and `@coder` live in VS Code's own chat panel, and that stays the
+default — it needs no explaining and works the moment the extension is
+installed. **Knowledge Base: Open Chat (Custom UI)** (also the layout icon at
+the top of the sidebar) opens the other thing that was asked for: a tab this
+extension fully owns, built from scratch rather than borrowed from the native
+chat renderer.
+
+It is a second *renderer* for the identical backend events, not a second
+implementation — the same `/api/search/stream` and `/api/chat/completions`
+routes, the same tools, the same confirmation before `write_file` or
+`run_terminal` acts. What it buys over the native panel:
+
+- a tool call is a labelled, collapsible card with its own status (running /
+  done / cancelled), not a line of Markdown saying "Running **read_file**…";
+- a source is a chip carrying its own name, not folded into the generic
+  reference list every chat participant shares;
+- the whole thing is themed with VS Code's own CSS variables, so it matches
+  whatever colour theme is active without a second stylesheet to maintain.
+
+Nothing in it is a dependency. The Markdown it renders — bold, code spans,
+fenced code blocks, links, the same `[1]` citation linking the answer
+document gets — is a small hand-written renderer in `src/markdown.ts` rather
+than a bundled library: this app's answers are prose, citations and the
+occasional code fence, and a renderer built for exactly that is auditable in
+one read. That matters because it is HTML being set on a page - every dynamic
+value is escaped before any Markdown pattern is recognised, which is what the
+tests in `test/markdown.test.ts` are really checking: that nothing a model
+writes can become a tag.
+
+---
+
 ## Also there
 
 | | |
@@ -184,19 +217,32 @@ keybindings still work, and `Ctrl+Alt+K` falls back to the search box.
 ## Development
 
 ```bash
-pnpm typecheck   # tsc --noEmit
-pnpm test        # node --test, no extension host needed
-pnpm lint        # biome
-pnpm build       # esbuild bundle into dist/
+pnpm typecheck    # tsc --noEmit
+pnpm test         # node --test, no extension host needed
+pnpm lint         # biome
+pnpm build        # esbuild: dist/extension.js AND dist/webview.js
+pnpm watch        # rebuild dist/extension.js on change
+pnpm watch:webview # rebuild dist/webview.js on change - run alongside watch
 ```
 
 The layering exists so the tests can run at all. `format.ts`, `http.ts`,
-`sse.ts` and `client.ts` import nothing from `vscode`, so `node --test` loads
-them directly — 49 tests, including the client driven against a stub server
-that enforces the same cookie and CSRF rules as the real API, and the SSE
-parser fed on chunk boundaries that fall in the wrong places. `chat.ts`,
-`documents.ts`, `resultsView.ts` and `extension.ts` do need the editor's API
-and are exercised by running it.
+`sse.ts`, `markdown.ts`, `webviewProtocol.ts`, `toolCallAggregator.ts`,
+`toolOutput.ts`, `src/webview/render.ts` and `client.ts` import nothing from
+`vscode`, so `node --test` loads them directly — 111 tests, including the
+client driven against a stub server that enforces the same cookie and CSRF
+rules as the real API, the SSE parser fed on chunk boundaries that fall in the
+wrong places, and the custom chat panel's own Markdown renderer checked
+against prompt-injection-shaped input (`<script>`, an attribute-injection
+attempt inside a link URL) with nothing standing between it and the page but
+that renderer's own escaping. `chat.ts`, `chatPanel.ts`, `documents.ts`,
+`resultsView.ts`, `src/webview/main.ts` and `extension.ts` do need the
+editor's or the browser's own API and are exercised by running them - the
+custom panel's rendering was additionally checked by loading the actual
+bundled `dist/webview.js` in a browser tab against a stand-in for VS Code's
+`acquireVsCodeApi`, which is what caught the two bugs no string-level test
+could have: a `[hidden]` element that stayed visible because a class rule of
+equal CSS specificity beat it, and a citation list double-numbered by
+combining its own `${n}.` with an `<ol>`'s automatic one.
 
 Two consequences of that split, both deliberate: the vscode-free files declare
 and assign their fields instead of using constructor parameter properties, and

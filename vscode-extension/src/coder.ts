@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { AuthError, type ChatMessage, type KnowledgeBaseClient } from "./client";
 import { collapse, historyFor } from "./format";
+import { ToolCallAggregator } from "./toolCallAggregator";
 import { executeTool, TOOLS, type ToolCall } from "./tools";
 
 /**
@@ -149,33 +150,4 @@ async function runTurn(
   }
 
   return { content, toolCalls: aggregator.finalize() };
-}
-
-class ToolCallAggregator {
-  private calls = new Map<number, { id?: string; type?: string; name?: string; args: string }>();
-
-  feed(delta: Partial<ToolCall> & { index?: number }): void {
-    const index = delta.index ?? 0;
-    let call = this.calls.get(index);
-    if (!call) {
-      call = { args: "" };
-      this.calls.set(index, call);
-    }
-    if (delta.id) call.id = delta.id;
-    if (delta.type) call.type = delta.type;
-    if (delta.function?.name) call.name = delta.function.name;
-    if (delta.function?.arguments) call.args += delta.function.arguments;
-  }
-
-  finalize(): ToolCall[] {
-    return Array.from(this.calls.values())
-      .filter((call): call is { id: string; type: "function"; name: string; args: string } =>
-        Boolean(call.id && call.type && call.name),
-      )
-      .map((call) => ({
-        id: call.id,
-        type: call.type,
-        function: { name: call.name, arguments: call.args },
-      }));
-  }
 }

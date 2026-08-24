@@ -94,6 +94,12 @@
     ],
     "commands": [
       {
+        "command": "knowledgeBase.openCustomChat",
+        "title": "Open Chat (Custom UI)",
+        "category": "Knowledge Base",
+        "icon": "$(layout-panel)"
+      },
+      {
         "command": "knowledgeBase.openChat",
         "title": "Ask in Chat",
         "category": "Knowledge Base",
@@ -164,6 +170,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "knowledgeBase.openCustomChat",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@-1"
+        },
         {
           "command": "knowledgeBase.openChat",
           "when": "view == knowledgeBase.results",
@@ -266,9 +277,12 @@
     ]
   },
   "scripts": {
-    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node20",
-    "watch": "pnpm run build --sourcemap --watch",
-    "package": "pnpm run build --minify",
+    "build:extension": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node20",
+    "build:webview": "esbuild src/webview/main.ts --bundle --outfile=dist/webview.js --format=iife --platform=browser --target=es2022",
+    "build": "pnpm run build:extension && pnpm run build:webview",
+    "watch": "pnpm run build:extension --sourcemap --watch",
+    "watch:webview": "pnpm run build:webview --sourcemap --watch",
+    "package": "pnpm run build:extension --minify && pnpm run build:webview --minify",
     "typecheck": "tsc --noEmit",
     "lint": "biome check",
     "format": "biome format --write",

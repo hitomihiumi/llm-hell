@@ -323,8 +323,13 @@ docker/
 vscode-extension/
   src/chat.ts          the @kb chat participant: transcript in, streamed answer out
   src/coder.ts         the @coder agent loop: tool calls out, tool results back in
+  src/chatPanel.ts     the custom chat tab - a second renderer, not a second backend
+  src/webview/         the panel's own script and its pure HTML-building pieces
+  src/markdown.ts      the panel's own Markdown renderer - escapes first, always
   src/tools.ts         what it may do locally - files, terminal, and the KB search
   src/toolOutput.ts    caps and path rules for tool results - pure, so tested
+  src/toolCallAggregator.ts  reassembles a streamed tool call - shared by both UIs
+  src/credentials.ts   connect Google and GitLab as yourself
   src/sse.ts           the event-stream parser - pure, so node --test runs it
   src/format.ts        answer document, citation links, history mapping - pure
   src/http.ts          cookies and base URLs - pure, same reason
