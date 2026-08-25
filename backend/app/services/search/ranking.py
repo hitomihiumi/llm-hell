@@ -8,11 +8,21 @@ normalising them - a source that happens to emit larger numbers would simply
 win. The only signal that means the same thing everywhere is *position
 within that source's own results*, which is exactly what RRF consumes:
 
-    score = source_weight / (k + rank_within_source)
+    score = sum over every ranked list of  source_weight / (k + rank)
 
 `k = 60` is the constant from the original RRF paper and is large on
 purpose: it flattens the curve so rank 1 does not swamp rank 3, which
 matters when the sources disagree about what "relevant" means.
+
+**The sum is across phrasings, and that is the point.** The planner runs
+several queries per question, so every source produces several ranked lists.
+Collapsing them by keeping each document's best rank - which is what this
+used to do - throws away the strongest relevance signal available for free:
+a document found by every phrasing is far more likely to be the answer than
+one found by a single lucky phrasing. Measured, with best-rank-wins: asked
+what the auth-service README said, `package.json` came first, because one
+phrasing happened to rank it top. Summing instead, four phrasings agreeing at
+rank 1 score 4/61, which beats a one-off rank 0 at 1/60 - agreement wins.
 
 This is a heuristic and is meant to be read as one. It is not tuned against
 any judged relevance set, and pretending otherwise would be worse than
@@ -64,7 +74,7 @@ def recency_factor(timestamp: datetime | None, *, now: datetime | None = None) -
 
 
 def fuse(
-    hits_by_source: dict[str, list[SearchHit]],
+    attempts_by_source: dict[str, list[list[SearchHit]]],
     *,
     weights: dict[str, float] | None = None,
     k: int = 60,
@@ -72,28 +82,71 @@ def fuse(
     per_source_cap: int | None = None,
     now: datetime | None = None,
 ) -> list[SearchHit]:
-    """Interleave every source's hits into one ranked list.
+    """Interleave every source's ranked lists into one.
+
+    `attempts_by_source` maps a source to the ranked lists it produced - one
+    per planned phrasing, so usually several. A source that ran one query has
+    a list of one list.
 
     `per_source_cap` stops one chatty source from filling the whole answer
     prompt. Without it, a KB query matching forty rows leaves no room for the
-    two GitLab hits that might have been the actual answer.
+    two GitLab hits that might have been the actual answer. It is applied to
+    the *result*, not to each input list: capping the inputs would silently
+    change what the sum is over.
 
-    Mutates each hit's `score` and reassigns `rank_in_source` to the position
-    the source actually returned it in, so the fused ordering stays
-    explainable after the fact.
+    Mutates each hit's `score` and `rank_in_source` - the latter to the best
+    position any phrasing gave it - so the fused ordering stays explainable
+    after the fact.
     """
     weights = weights or {}
-    scored: list[SearchHit] = []
 
-    for source_key, hits in hits_by_source.items():
+    # Accumulated across every phrasing, keyed on hit id so the same document
+    # found by two queries is one entry rather than two.
+    totals: dict[str, float] = {}
+    best_rank: dict[str, int] = {}
+    chosen: dict[str, SearchHit] = {}
+
+    for source_key, attempts in attempts_by_source.items():
         weight = weights.get(source_key, 1.0)
-        capped = hits[:per_source_cap] if per_source_cap else hits
-        for rank, hit in enumerate(capped):
-            hit.rank_in_source = rank
-            hit.score = (weight / (k + rank)) * recency_factor(hit.timestamp, now=now)
-            scored.append(hit)
+        for attempt in attempts:
+            for rank, hit in enumerate(attempt):
+                totals[hit.id] = totals.get(hit.id, 0.0) + weight / (k + rank)
+                if hit.id not in best_rank or rank < best_rank[hit.id]:
+                    best_rank[hit.id] = rank
+                    chosen[hit.id] = hit
 
-    # Sort by score, then by source key and rank so the order is total and
-    # a tie does not shuffle between identical requests.
-    scored.sort(key=lambda hit: (-hit.score, hit.source, hit.rank_in_source))
-    return scored[:total_limit]
+    for hit_id, hit in chosen.items():
+        hit.score = totals[hit_id]
+        hit.rank_in_source = best_rank[hit_id]
+
+    # Recency is a tie-break, and deliberately sits *after* the source key so
+    # that it can only ever order hits from the same source.
+    #
+    # As a multiplier on the score it was not a tie-break at all but a
+    # structural bias between sources: undated hits get 1.0 and dated ones up
+    # to 1.016, GitLab code hits carry no timestamp and Drive documents always
+    # do, so Drive outranked GitLab at equal rank on the strength of having
+    # dates rather than of being relevant. Measured: Drive's `.env` came top
+    # for "auth-service README" that way.
+    ordered = sorted(
+        chosen.values(),
+        key=lambda hit: (
+            -hit.score,
+            hit.source,
+            -recency_factor(hit.timestamp, now=now),
+            hit.rank_in_source,
+            hit.id,
+        ),
+    )
+
+    if per_source_cap is not None:
+        kept: list[SearchHit] = []
+        seen: dict[str, int] = {}
+        for hit in ordered:
+            if seen.get(hit.source, 0) >= per_source_cap:
+                continue
+            seen[hit.source] = seen.get(hit.source, 0) + 1
+            kept.append(hit)
+        ordered = kept
+
+    return ordered[:total_limit]

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { linkCitationsForWebview, renderAnswer, renderMarkdown } from "../src/markdown.ts";
+import {
+  isShellLanguage,
+  linkCitationsForWebview,
+  renderAnswer,
+  renderMarkdown,
+} from "../src/markdown.ts";
 
 /**
  * The webview's own renderer, not a library's.
@@ -129,4 +134,70 @@ test("renderAnswer still escapes what the model wrote around a citation", () => 
 
   assert.ok(!/<b>bold claim<\/b>/.test(html));
   assert.ok(html.includes("&lt;b&gt;"));
+});
+
+// --- code block actions ------------------------------------------------------------
+
+test("a fenced code block carries a toolbar and names its language", () => {
+  const html = renderMarkdown("```ts\nconst x = 1;\n```");
+
+  assert.ok(html.includes('class="code-block"'));
+  assert.ok(html.includes('data-language="ts"'));
+  assert.ok(html.includes('data-code-action="copy"'));
+  assert.ok(html.includes('data-code-action="insert"'));
+  assert.ok(html.includes('data-code-action="new-file"'));
+  assert.ok(html.includes("const x = 1;"));
+});
+
+test("a fence with no language still renders, labelled text", () => {
+  const html = renderMarkdown("```\nplain\n```");
+
+  assert.ok(html.includes(">text<"));
+  assert.ok(html.includes('data-language=""'));
+});
+
+test("run-in-terminal is offered on a shell fence and withheld from a source one", () => {
+  /* The action only types the command into a terminal, never runs it - but
+     offering "run this" against a TypeScript file is nonsense regardless. */
+  assert.ok(renderMarkdown("```bash\nls -la\n```").includes('data-code-action="terminal"'));
+  assert.ok(!renderMarkdown("```python\nprint(1)\n```").includes('data-code-action="terminal"'));
+});
+
+test("isShellLanguage covers the shells people actually write, and nothing else", () => {
+  for (const language of [
+    "",
+    "bash",
+    "sh",
+    "zsh",
+    "shell",
+    "console",
+    "powershell",
+    "ps1",
+    "cmd",
+  ]) {
+    assert.ok(isShellLanguage(language), `${language || "(none)"} should be shell`);
+  }
+  for (const language of ["ts", "python", "json", "yaml", "go"]) {
+    assert.ok(!isShellLanguage(language), `${language} should not be shell`);
+  }
+});
+
+test("isShellLanguage ignores case and surrounding space", () => {
+  assert.ok(isShellLanguage("  Bash "));
+  assert.ok(isShellLanguage("PowerShell"));
+});
+
+test("the toolbar cannot be escaped through a language tag", () => {
+  /* The language reaches an HTML attribute, so a fence claiming to be
+     `ts" onload="evil()` must not be able to close it. */
+  const html = renderMarkdown('```ts" onload="evil()\ncode\n```');
+
+  assert.ok(!html.includes('onload="evil()'));
+});
+
+test("code inside a block is still escaped now that it sits in a wrapper", () => {
+  const html = renderMarkdown("```html\n<script>alert(1)</script>\n```");
+
+  assert.ok(html.includes("&lt;script&gt;"));
+  assert.ok(!html.includes("<script>alert(1)</script>"));
 });

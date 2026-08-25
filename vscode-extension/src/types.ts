@@ -10,10 +10,28 @@
 
 export type HitKind = "document" | "email" | "code" | "repository" | "commit" | "row" | "unknown";
 
+/**
+ * The larger thing a hit lives inside - the repository a file belongs to,
+ * the table a row came from. Absent when the hit IS the whole thing, which a
+ * Drive document is.
+ *
+ * Supplied by the backend rather than derived here, because deriving it means
+ * reading a repository name back out of a title, and a project path contains
+ * slashes of its own.
+ */
+export interface HitContainer {
+  id: string;
+  title: string;
+  kind: "repository" | "table" | "folder" | "mailbox";
+}
+
 export interface SearchHit {
   id: string;
   source: string;
   kind: HitKind;
+  /** Identifies the document; `id` identifies one match within it. */
+  external_id?: string | null;
+  container?: HitContainer | null;
   title: string;
   snippet: string;
   url: string | null;
@@ -52,6 +70,7 @@ export interface Answer {
   hits_used: number;
   hits_dropped: number;
   hallucinated_citations: number;
+  cited_hit_ids?: string[];
 }
 
 export interface SearchResponse {

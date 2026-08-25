@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
+import type { AgentMode } from "./agentMode";
 import { registerChatParticipant } from "./chat";
-import { KnowledgeBaseChatPanel } from "./chatPanel";
+import { KnowledgeBaseChatViewProvider } from "./chatView";
 import { ApiError, AuthError, KnowledgeBaseClient } from "./client";
 import { registerCoderParticipant } from "./coder";
 import { manageCredentials, offerMissing } from "./credentials";
@@ -71,7 +72,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const chat = registerChat(context, client, results, view);
   const hasChat = chat.length > 0;
 
-  const coderChat = registerCoder(context, client);
+  const coderChat = registerCoder(
+    context,
+    client,
+    () => readSettings().maxAgentTurns,
+    () => readSettings().agentMode,
+  );
 
   /** Put a question in the chat box, addressed to the participant. */
   async function askInChat(question: string): Promise<void> {
@@ -86,6 +92,26 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.commands.executeCommand("workbench.action.chat.open", {
       query: question ? `@coder ${question}` : "@coder ",
     });
+  }
+
+  const chatView = new KnowledgeBaseChatViewProvider(context, client, documents, () => {
+    const settings = readSettings();
+    return {
+      sources: context.workspaceState.get<string[]>(SOURCES_KEY) ?? settings.sources,
+      limit: settings.limit,
+      maxAgentTurns: settings.maxAgentTurns,
+      agentMode: settings.agentMode,
+    };
+  });
+
+  // Selection changes arrive per keystroke while a user drags a selection.
+  // The chips only ever show a filename and a line count, so redrawing them
+  // that often is pure waste - one refresh once the movement settles is the
+  // same result for a fraction of the traffic across the postMessage bridge.
+  let contextTimer: NodeJS.Timeout | undefined;
+  function scheduleContextRefresh(): void {
+    if (contextTimer) clearTimeout(contextTimer);
+    contextTimer = setTimeout(() => chatView.publishContext(), 150);
   }
 
   context.subscriptions.push(
@@ -109,15 +135,26 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand("knowledgeBase.openCoderChat", () => askInCoderChat("")),
 
-    vscode.commands.registerCommand("knowledgeBase.openCustomChat", () => {
-      KnowledgeBaseChatPanel.createOrShow(context, client, documents, () => {
-        const settings = readSettings();
-        return {
-          sources: context.workspaceState.get<string[]>(SOURCES_KEY) ?? settings.sources,
-          limit: settings.limit,
-        };
-      });
+    vscode.window.registerWebviewViewProvider(KnowledgeBaseChatViewProvider.viewType, chatView, {
+      // The transcript is a page, not a render of state the host can rebuild
+      // cheaply - a collapsed sidebar that threw it away and replayed it
+      // would lose scroll position and every open tool card with it.
+      webviewOptions: { retainContextWhenHidden: true },
     }),
+
+    // The editor moved, so the chips above the composer should say so. Both
+    // events fire far more often than the view needs redrawing, hence the
+    // coalescing timer rather than a post per keystroke.
+    vscode.window.onDidChangeActiveTextEditor(scheduleContextRefresh),
+    vscode.window.onDidChangeTextEditorSelection(scheduleContextRefresh),
+
+    vscode.commands.registerCommand("knowledgeBase.openCustomChat", () =>
+      vscode.commands.executeCommand("knowledgeBase.chat.focus"),
+    ),
+
+    vscode.commands.registerCommand("knowledgeBase.newChat", () => chatView.newChat()),
+
+    vscode.commands.registerCommand("knowledgeBase.chatHistory", () => chatView.showHistory()),
 
     vscode.commands.registerCommand("knowledgeBase.signIn", authenticate),
 
@@ -285,12 +322,14 @@ function registerChat(
 function registerCoder(
   context: vscode.ExtensionContext,
   client: KnowledgeBaseClient,
+  maxAgentTurns: () => number,
+  agentMode: () => AgentMode,
 ): vscode.Disposable[] {
   if (!vscode.chat?.createChatParticipant) {
     return [];
   }
   try {
-    const participant = registerCoderParticipant(context, client);
+    const participant = registerCoderParticipant(context, client, maxAgentTurns, agentMode);
     return [participant];
   } catch (error) {
     console.warn("knowledge base: coder participant not registered", error);
@@ -312,6 +351,8 @@ interface Settings {
   limit: number;
   answer: boolean;
   searchOnSelection: boolean;
+  maxAgentTurns: number;
+  agentMode: AgentMode;
 }
 
 export function readSettings(): Settings {
@@ -323,6 +364,8 @@ export function readSettings(): Settings {
     limit: config.get<number>("limit", 20),
     answer: config.get<boolean>("answer", true),
     searchOnSelection: config.get<boolean>("searchOnSelection", true),
+    maxAgentTurns: config.get<number>("coder.maxAgentTurns", 30),
+    agentMode: config.get<AgentMode>("coder.mode", "manual"),
   };
 }
 

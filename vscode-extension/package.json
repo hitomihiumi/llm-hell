@@ -59,6 +59,28 @@
           "type": "boolean",
           "default": true,
           "description": "Ask before @coder writes files or runs terminal commands."
+        },
+        "knowledgeBase.coder.maxAgentTurns": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum tool rounds for the coding agent."
+        },
+        "knowledgeBase.coder.mode": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "assisted",
+            "autonomous"
+          ],
+          "default": "manual",
+          "markdownEnumDescriptions": [
+            "Ask before writing a file and before running a command.",
+            "Write files in the workspace without asking; still ask before running a command.",
+            "Ask about nothing. File paths outside the workspace are still refused."
+          ],
+          "description": "Tool approval policy for the coding agent."
         }
       }
     },
@@ -73,6 +95,12 @@
     },
     "views": {
       "knowledgeBase": [
+        {
+          "id": "knowledgeBase.chat",
+          "name": "Chat",
+          "type": "webview",
+          "icon": "media/icon.svg"
+        },
         {
           "id": "knowledgeBase.results",
           "name": "Results",
@@ -95,9 +123,21 @@
     "commands": [
       {
         "command": "knowledgeBase.openCustomChat",
-        "title": "Open Chat (Custom UI)",
+        "title": "Open Chat",
         "category": "Knowledge Base",
         "icon": "$(layout-panel)"
+      },
+      {
+        "command": "knowledgeBase.newChat",
+        "title": "New Chat",
+        "category": "Knowledge Base",
+        "icon": "$(add)"
+      },
+      {
+        "command": "knowledgeBase.chatHistory",
+        "title": "Earlier Conversations",
+        "category": "Knowledge Base",
+        "icon": "$(history)"
       },
       {
         "command": "knowledgeBase.openChat",
@@ -171,9 +211,19 @@
     "menus": {
       "view/title": [
         {
-          "command": "knowledgeBase.openCustomChat",
-          "when": "view == knowledgeBase.results",
-          "group": "navigation@-1"
+          "command": "knowledgeBase.newChat",
+          "when": "view == knowledgeBase.chat",
+          "group": "navigation@0"
+        },
+        {
+          "command": "knowledgeBase.chatHistory",
+          "when": "view == knowledgeBase.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "knowledgeBase.accounts",
+          "when": "view == knowledgeBase.chat",
+          "group": "navigation@2"
         },
         {
           "command": "knowledgeBase.openChat",

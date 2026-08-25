@@ -239,8 +239,18 @@ async def federated_search(
     by_source = {result.source_key: result for result in results}
     weights = {source.key: source.weight for source, _ in pairs}
 
+    # Every phrasing's ranked list, kept apart rather than collapsed. Fusion
+    # sums a document's contribution across them, so a document that several
+    # phrasings agreed on outranks one that a single lucky phrasing put first
+    # - see ranking.py. `_merge_attempts` above still owns the per-source
+    # status, which is a different question from how the hits are scored.
+    attempts_by_source: dict[str, list[list[SearchHit]]] = {
+        source.key: [attempt[index].hits for attempt in gathered]
+        for index, (source, _) in enumerate(pairs)
+    }
+
     hits = fuse(
-        {result.source_key: result.hits for result in results},
+        attempts_by_source,
         weights=weights,
         k=settings.search_rrf_k,
         total_limit=total_limit,

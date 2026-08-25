@@ -23,7 +23,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.models.source import Source
-from app.schemas.search import SearchHit
+from app.schemas.search import HitContainer, SearchHit
 from app.services.llm import chat
 from app.services.mcp.connector import (
     SearchContext,
@@ -336,6 +336,14 @@ class PostgresKbConnector:
                     source=self.key,
                     kind="row",
                     external_id=str(pk),
+                    # The table a row came out of. "Only the rows from
+                    # `datasheets`" is the knowledge-base equivalent of "only
+                    # what came out of auth-service", and the planner is free
+                    # to pick a different table per query, so a response can
+                    # genuinely span several.
+                    container=HitContainer(
+                        id=generated.table, title=generated.table, kind="table"
+                    ),
                     title=str(row.get(generated.title_column) or f"{generated.table} #{pk}"),
                     snippet=excerpt_around(str(row.get(generated.snippet_column) or ""), query, SNIPPET_CHARS),
                     # A database row has no natural URL, so one is

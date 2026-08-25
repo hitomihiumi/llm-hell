@@ -134,6 +134,7 @@ class AnswerResult:
     hits_used: int = 0
     hits_dropped: int = 0
     hallucinated_citations: int = 0
+    cited_hit_ids: list[str] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
     error: str | None = None
@@ -363,6 +364,7 @@ async def synthesize(
         hits_used=len(included),
         hits_dropped=len(hits) - len(included),
         hallucinated_citations=hallucinated,
+        cited_hit_ids=[citation.hit_id for citation in citations],
         prompt_tokens=completion.prompt_tokens,
         completion_tokens=completion.completion_tokens,
     )
@@ -441,6 +443,7 @@ async def synthesize_stream(
             hits_used=len(included),
             hits_dropped=len(hits) - len(included),
             hallucinated_citations=hallucinated,
+            cited_hit_ids=[citation.hit_id for citation in citations],
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         ),

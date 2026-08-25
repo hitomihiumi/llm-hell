@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { environmentMessage } from "./agentContext";
+import type { AgentMode } from "./agentMode";
 import { AuthError, type ChatMessage, type KnowledgeBaseClient } from "./client";
 import { collapse, historyFor } from "./format";
 import { ToolCallAggregator } from "./toolCallAggregator";
@@ -24,8 +26,6 @@ import { executeTool, TOOLS, type ToolCall } from "./tools";
 
 export const PARTICIPANT_ID = "knowledgeBase.coder";
 
-const MAX_AGENT_TURNS = 100;
-
 interface AgentTurn {
   content: string;
   toolCalls: ToolCall[];
@@ -34,6 +34,8 @@ interface AgentTurn {
 export function registerCoderParticipant(
   _context: vscode.ExtensionContext,
   client: KnowledgeBaseClient,
+  maxAgentTurns: () => number,
+  agentMode: () => AgentMode,
 ): vscode.ChatParticipant {
   const participant = vscode.chat.createChatParticipant(
     PARTICIPANT_ID,
@@ -47,11 +49,15 @@ export function registerCoderParticipant(
       const abort = new AbortController();
       token.onCancellationRequested(() => abort.abort());
 
-      const messages: ChatMessage[] = buildMessages(chatContext.history, question);
+      const messages: ChatMessage[] = [
+        environmentMessage(),
+        ...buildMessages(chatContext.history, question),
+      ];
 
+      const turnLimit = Math.max(1, Math.min(100, maxAgentTurns()));
       let finished = false;
       try {
-        for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
+        for (let turn = 0; turn < turnLimit; turn++) {
           if (token.isCancellationRequested) break;
           if (turn > 0) {
             stream.progress("Continuing…");
@@ -71,7 +77,7 @@ export function registerCoderParticipant(
 
           for (const call of result.toolCalls) {
             stream.markdown(`\n\n*Running **${call.function.name}**…*\n\n`);
-            const output = await executeTool(call, client);
+            const output = await executeTool(call, client, agentMode());
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -94,9 +100,7 @@ export function registerCoderParticipant(
         // The loop ran out of turns rather than reaching an answer. Saying so
         // is the difference between an agent that stopped and an agent that
         // looks like it forgot what it was doing halfway through.
-        stream.markdown(
-          `\n\n_Stopped after ${MAX_AGENT_TURNS} tool rounds. Ask again to carry on._\n`,
-        );
+        stream.markdown(`\n\n_Stopped after ${turnLimit} tool rounds. Ask again to carry on._\n`);
       }
 
       return {};

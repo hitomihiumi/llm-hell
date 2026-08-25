@@ -3,9 +3,11 @@
 import { useMemo, useState } from "react";
 import { AnswerMarkdown } from "@/components/AnswerMarkdown";
 import { jumpToHit } from "@/components/CitedText";
+import { DocumentFilter } from "@/components/DocumentFilter";
 import { ResultCard } from "@/components/ResultCard";
 import { SourceBadge } from "@/components/SourceBadge";
 import { useCopy } from "@/i18n/LocaleProvider";
+import { groupHits, matchesFilter } from "@/lib/hitGroups";
 import type { Citation } from "@/lib/types";
 import type { SearchRun } from "@/lib/useSearch";
 
@@ -17,6 +19,12 @@ export function ChatMessage({ run }: { run: SearchRun }) {
   // them. Reset whenever the run itself changes - a filter chosen for one
   // question has nothing to do with the next one's sources.
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  // Which repository or single document the list is narrowed to, or null.
+  // Separate from `sourceFilter`, which narrows by provider: the two answer
+  // different questions and are usefully combined - "the GitLab ones" and
+  // then "the ones from auth-service" is a real sequence.
+  const [documentFilter, setDocumentFilter] = useState<string | null>(null);
+  const [usedOnly, setUsedOnly] = useState(false);
 
   function jump(citation: Citation) {
     // The sources panel is collapsed by default in this layout, so a
@@ -39,6 +47,21 @@ export function ChatMessage({ run }: { run: SearchRun }) {
   const visibleHits = sourceFilter
     ? run.hits.filter((hit) => hit.source === sourceFilter)
     : run.hits;
+
+  // Grouped from what the provider filter left, so narrowing to GitLab also
+  // narrows the tree below to GitLab's repositories rather than listing
+  // Drive documents the list can no longer show.
+  const groups = useMemo(
+    () => groupHits(visibleHits, run.citedHitIds),
+    [visibleHits, run.citedHitIds],
+  );
+
+  const documentHits = visibleHits.filter((hit) =>
+    matchesFilter(hit, documentFilter),
+  );
+  const filteredHits = usedOnly
+    ? documentHits.filter((hit) => run.citedHitIds.includes(hit.id))
+    : documentHits;
 
   return (
     <article className="border-t border-hairline pt-8">
@@ -122,6 +145,16 @@ export function ChatMessage({ run }: { run: SearchRun }) {
               <div className="mt-4 space-y-4">
                 {run.status.length > 0 && (
                   <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setUsedOnly((current) => !current)}
+                      aria-pressed={usedOnly}
+                      className={`border px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] transition-colors ${usedOnly ? "border-accent text-white" : "border-hairline text-white/50 hover:text-white"}`}
+                    >
+                      {usedOnly
+                        ? copy.sourceFilter.allResults
+                        : copy.sourceFilter.usedOnly}
+                    </button>
                     {run.status.map((entry) => (
                       <SourceBadge
                         key={entry.source}
@@ -133,12 +166,17 @@ export function ChatMessage({ run }: { run: SearchRun }) {
                         // narrow the list down to.
                         onToggleFilter={
                           entry.ok && entry.hits > 0
-                            ? () =>
+                            ? () => {
+                                // A document selection made under a different
+                                // provider filter cannot survive the change -
+                                // it would hide every remaining hit.
+                                setDocumentFilter(null);
                                 setSourceFilter((current) =>
                                   current === entry.source
                                     ? null
                                     : entry.source,
-                                )
+                                );
+                              }
                             : undefined
                         }
                       />
@@ -154,9 +192,14 @@ export function ChatMessage({ run }: { run: SearchRun }) {
                     )}
                   </div>
                 )}
-                {visibleHits.length > 0 && (
+                <DocumentFilter
+                  groups={groups}
+                  selected={documentFilter}
+                  onSelect={setDocumentFilter}
+                />
+                {filteredHits.length > 0 && (
                   <ol className="space-y-3">
-                    {visibleHits.map((hit, index) => (
+                    {filteredHits.map((hit, index) => (
                       <ResultCard key={hit.id} hit={hit} index={index + 1} />
                     ))}
                   </ol>

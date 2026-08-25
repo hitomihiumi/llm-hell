@@ -113,6 +113,7 @@ def _to_answer_out(result: answer_service.AnswerResult) -> AnswerOut:
         hits_used=result.hits_used,
         hits_dropped=result.hits_dropped,
         hallucinated_citations=result.hallucinated_citations,
+        cited_hit_ids=result.cited_hit_ids,
     )
 
 
@@ -361,7 +362,8 @@ async def search_stream(
                     "duration_ms": int((time.monotonic() - started_at) * 1000) + federated.duration_ms,
                     "hits_used": final.hits_used,
                     "hits_dropped": final.hits_dropped,
-                    "hallucinated_citations": final.hallucinated_citations,
+                     "hallucinated_citations": final.hallucinated_citations,
+                     "cited_hit_ids": final.cited_hit_ids,
                     "tokens_prompt": final.prompt_tokens,
                     "tokens_completion": final.completion_tokens,
                 },

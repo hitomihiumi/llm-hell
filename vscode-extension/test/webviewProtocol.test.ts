@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { summariseToolArgs } from "../src/webviewProtocol.ts";
+import type { MessagePart } from "../src/webviewProtocol.ts";
+import {
+  appendPart,
+  fullToolArgs,
+  summariseToolArgs,
+  visibleText,
+} from "../src/webviewProtocol.ts";
 
 /**
  * What a tool-call card's subtitle says, before the call has even finished.
@@ -61,4 +67,86 @@ test("whitespace in a multi-line command collapses to one line", () => {
   );
 
   assert.equal(summary, "echo a echo b");
+});
+
+// --- the argument shown on an approval card ------------------------------------
+
+test("fullToolArgs keeps a multi-line command whole", () => {
+  /* This is the string a person reads before allowing a command to run, so
+     the one-line summary's flattening and 100-character cut are exactly
+     wrong here. */
+  const command = "cd build\ncmake ..\nmake -j8 && ./run --with a very long list of arguments here";
+  const full = fullToolArgs("run_terminal", JSON.stringify({ command }));
+
+  assert.equal(full, command);
+});
+
+test("fullToolArgs falls back to the summary for tools that never ask", () => {
+  assert.equal(
+    fullToolArgs("search_knowledge_base", JSON.stringify({ query: "auth-service" })),
+    "auth-service",
+  );
+});
+
+test("fullToolArgs hands back unparseable arguments rather than swallowing them", () => {
+  assert.equal(fullToolArgs("run_terminal", "{not json"), "{not json");
+});
+
+// --- the parts sequence ----------------------------------------------------------
+
+test("visibleText is the answer, without the model's thinking", () => {
+  /* Reasoning is the model talking to itself. Feeding it back as history
+     invites the next turn to answer the thinking rather than the question,
+     and copying it hands the user something they did not ask for. */
+  const text = visibleText({
+    id: "m1",
+    role: "assistant",
+    mode: "coder",
+    status: "done",
+    parts: [
+      { kind: "reasoning", text: "Let me think about this." },
+      { kind: "text", text: "The version is 2.0.0." },
+      { kind: "tool", call: { id: "c1", name: "read_file", argsSummary: "a", status: "done" } },
+      { kind: "text", text: " Anything else?" },
+    ],
+  });
+
+  assert.equal(text, "The version is 2.0.0. Anything else?");
+});
+
+test("appendPart grows the run in progress instead of fragmenting it", () => {
+  /* Streaming arrives a token at a time; a part per token would put a
+     paragraph break between every pair of them. */
+  const parts: MessagePart[] = [];
+  appendPart(parts, "text", "Hello");
+  appendPart(parts, "text", " world");
+
+  assert.equal(parts.length, 1);
+  assert.deepEqual(parts[0], { kind: "text", text: "Hello world" });
+});
+
+test("appendPart starts a new part when the channel changes", () => {
+  const parts: MessagePart[] = [];
+  appendPart(parts, "reasoning", "thinking");
+  appendPart(parts, "text", "answering");
+  appendPart(parts, "reasoning", "more thinking");
+
+  assert.deepEqual(
+    parts.map((part) => part.kind),
+    ["reasoning", "text", "reasoning"],
+  );
+});
+
+test("appendPart does not merge across a tool call", () => {
+  /* Text before and after a tool are separate thoughts, and merging them
+     would put the tool card in the wrong place. */
+  const parts: MessagePart[] = [{ kind: "text", text: "before" }];
+  parts.push({
+    kind: "tool",
+    call: { id: "c1", name: "read_file", argsSummary: "a", status: "done" },
+  });
+  appendPart(parts, "text", "after");
+
+  assert.equal(parts.length, 3);
+  assert.equal(parts[2].kind, "text");
 });

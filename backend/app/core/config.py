@@ -19,6 +19,7 @@ fixture in `tests/conftest.py` does exactly that.
 """
 
 from functools import lru_cache
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -85,6 +86,18 @@ class Settings(BaseSettings):
     agent_model_id: str = ""
     agent_max_output_tokens: int = 4096
     agent_temperature: float = 0.2
+    # Extra fields merged into the upstream agent request, as JSON.
+    #
+    # Exists for OpenRouter's provider routing. The agent reliably stops
+    # writing mid-word to emit a tool call - "що виводить приві", then
+    # `write_file` - and every request measured landed on the same provider,
+    # so whether that is the model or that provider is a question this makes
+    # answerable:
+    #
+    #   AGENT_EXTRA_BODY={"provider": {"ignore": ["Relace"]}}
+    #
+    # Merged last, so it can override any default the body builder sets.
+    agent_extra_body: dict[str, Any] = {}
 
     # --- Search federation ------------------------------------------------
     # Wall clock for one source's entire search(), which may span several

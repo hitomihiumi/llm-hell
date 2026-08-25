@@ -123,12 +123,68 @@ export function renderMarkdown(source: string): string {
   return html.join("\n");
 }
 
+/**
+ * Languages where "run this" is a coherent offer.
+ *
+ * A fence with no language is included: a model writing a bare ``` block in
+ * answer to "how do I build this" is almost always writing a command, and the
+ * action only ever *types* it into a terminal - it never runs it - so the
+ * cost of offering it on something that turns out to be prose is a button
+ * nobody presses.
+ */
+const SHELL_LANGUAGES = new Set([
+  "",
+  "bash",
+  "cmd",
+  "console",
+  "powershell",
+  "ps1",
+  "sh",
+  "shell",
+  "zsh",
+]);
+
+export function isShellLanguage(language: string): boolean {
+  return SHELL_LANGUAGES.has(language.trim().toLowerCase());
+}
+
+/** The action buttons on a code block, as `[action, label, svg path]`. */
+const CODE_ACTIONS: ReadonlyArray<readonly [string, string, string]> = [
+  ["copy", "Copy", "M4 2h6l2 2v8H4V2zm1 1v8h6V5H9V3H5z"],
+  ["insert", "Insert at cursor", "M8 2v12M3 7l5-5 5 5"],
+  ["new-file", "Create new file", "M4 2h5l3 3v9H4V2zm5 0v3h3M6 8h4M6 11h4"],
+  ["terminal", "Run in terminal", "M2 3h12v10H2V3zm2 2l3 3-3 3m5 0h4"],
+];
+
 function renderCodeBlock(block: CodeBlock): string {
   // The code was captured before HTML-escaping ran on the rest of the
   // document, so it is escaped here on its own - once, and only once.
   const language = block.language.replace(/[^a-zA-Z0-9_+-]/g, "");
   const classAttr = language ? ` class="language-${language}"` : "";
-  return `<pre><code${classAttr}>${escapeHtml(block.code.replace(/\n$/, ""))}</code></pre>`;
+  const code = escapeHtml(block.code.replace(/\n$/, ""));
+
+  const buttons = CODE_ACTIONS.filter(
+    ([action]) => action !== "terminal" || isShellLanguage(language),
+  )
+    .map(
+      ([action, label, path]) =>
+        `<button type="button" class="code-action" data-code-action="${action}" title="${label}" aria-label="${label}">` +
+        `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="${path}" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
+        "</button>",
+    )
+    .join("");
+
+  // The language is carried as an attribute as well as shown, because
+  // "create a new file from this" needs to know what to open it as, and the
+  // `language-x` class on the <code> is the webview's business rather than
+  // something the click handler should be parsing back out.
+  return (
+    `<div class="code-block" data-language="${language}">` +
+    `<div class="code-block-header"><span class="code-block-language">${language || "text"}</span>` +
+    `<div class="code-block-actions">${buttons}</div></div>` +
+    `<pre><code${classAttr}>${code}</code></pre>` +
+    "</div>"
+  );
 }
 
 /** Bold, italic, inline code and links, within one already-escaped line. */

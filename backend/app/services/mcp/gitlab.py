@@ -32,7 +32,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app.core.config import Settings
 from app.models.source import Source
-from app.schemas.search import SearchHit
+from app.schemas.search import HitContainer, SearchHit
 from app.services.mcp.connector import (
     SearchContext,
     SourceResult,
@@ -307,6 +307,13 @@ class GitLabConnector:
                     source=self.key,
                     kind="repository",
                     external_id=project_id or None,
+                    # A repository hit belongs to its own repository, so that
+                    # it groups with the code hits from the same project
+                    # rather than sitting beside them as a second top-level
+                    # row with the identical name.
+                    container=HitContainer(
+                        id=project_id or str(path), title=str(path), kind="repository"
+                    ),
                     title=str(path),
                     snippet=truncate(project.get("description") or "", SNIPPET_CHARS),
                     url=self._rewrite_host(project.get("web_url")),
@@ -521,6 +528,17 @@ class GitLabConnector:
                     kind="code",
                     external_id=f"{project_id}:{path}",
                     title=f"{self._project_paths.get(project_id, project_id)}/{path}",
+                    # The repository, from the id rather than parsed back out
+                    # of the title: a project path contains slashes of its
+                    # own, so splitting the title cannot tell where the
+                    # namespace ends and the file path begins.
+                    container=HitContainer(
+                        id=project_id,
+                        title=self._project_paths.get(project_id, project_id),
+                        kind="repository",
+                    )
+                    if project_id
+                    else None,
                     snippet=truncate(blob.get("data") or "", SNIPPET_CHARS),
                     url=self._blob_url(project_id, str(path), blob.get("ref") or "HEAD", startline),
                     raw=blob if ctx.debug else None,

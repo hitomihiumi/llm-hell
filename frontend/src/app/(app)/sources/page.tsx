@@ -20,6 +20,7 @@ export default function SourcesPage() {
   const [checking, setChecking] = useState<string | null>(null);
   const [health, setHealth] = useState<Record<string, HealthOut>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // useCallback so it is a stable dependency of the effect below, rather
   // than a new function on every render.
@@ -28,7 +29,8 @@ export default function SourcesPage() {
       api
         .get<Source[]>("/api/sources")
         .then(setSources)
-        .catch(() => setNotice(copy.sources.loadFailed)),
+        .catch(() => setNotice(copy.sources.loadFailed))
+        .finally(() => setLoading(false)),
     [copy.sources.loadFailed],
   );
 
@@ -95,114 +97,139 @@ export default function SourcesPage() {
 
       {/* One row per source, in the site's stacked-rule style rather than as
           separate cards — these are a list of settings, not a gallery. */}
-      <ul className="border-t border-hairline">
-        {sources.map((source) => {
-          const latest =
-            health[source.key]?.result ?? source.last_check_result ?? null;
-          const tools = Array.isArray(latest?.tools)
-            ? (latest.tools as string[])
-            : null;
-          const ok = latest ? Boolean(latest.ok) : null;
+      {loading ? (
+        <p className="border-t border-hairline py-8 font-mono text-[11px] uppercase tracking-[0.2em] text-white/40">
+          {copy.sources.loading}
+        </p>
+      ) : sources.length === 0 ? (
+        <div className="border-t border-hairline py-8">
+          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-white/40">
+            {copy.sources.empty}
+          </p>
+          {notice && (
+            <button
+              type="button"
+              onClick={() => {
+                setNotice(null);
+                setLoading(true);
+                void load();
+              }}
+              className="mt-4 font-display text-[10px] uppercase tracking-[0.24em] text-white underline underline-offset-4"
+            >
+              {copy.sources.retry}
+            </button>
+          )}
+        </div>
+      ) : (
+        <ul className="border-t border-hairline">
+          {sources.map((source) => {
+            const latest =
+              health[source.key]?.result ?? source.last_check_result ?? null;
+            const tools = Array.isArray(latest?.tools)
+              ? (latest.tools as string[])
+              : null;
+            const ok = latest ? Boolean(latest.ok) : null;
 
-          return (
-            <li key={source.key} className="border-b border-hairline py-6">
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "h-1.5 w-1.5",
-                    source.enabled ? "bg-accent" : "bg-white/20",
-                  )}
-                />
+            return (
+              <li key={source.key} className="border-b border-hairline py-6">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "h-1.5 w-1.5",
+                      source.enabled ? "bg-accent" : "bg-white/20",
+                    )}
+                  />
 
-                <h2 className="font-display text-2xl uppercase tracking-tight text-white">
-                  {source.display_name}
-                </h2>
+                  <h2 className="font-display text-2xl uppercase tracking-tight text-white">
+                    {source.display_name}
+                  </h2>
 
-                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">
-                  {source.kind}
-                </span>
-                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">
-                  {copy.sources.weight} {source.weight}
-                </span>
-                <span
-                  className={cn(
-                    "font-mono text-[10px] uppercase tracking-[0.2em]",
-                    source.enabled ? "text-white/60" : "text-white/30",
-                  )}
-                >
-                  {source.enabled
-                    ? copy.sources.enabled
-                    : copy.sources.disabled}
-                </span>
-
-                <div className="ml-auto flex gap-3">
-                  <SpaceButton
-                    variant="ghost"
-                    size="sm"
-                    withArrow={false}
-                    onClick={() => toggle(source)}
-                    className="border-hairline text-white/70"
+                  <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">
+                    {source.kind}
+                  </span>
+                  <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">
+                    {copy.sources.weight} {source.weight}
+                  </span>
+                  <span
+                    className={cn(
+                      "font-mono text-[10px] uppercase tracking-[0.2em]",
+                      source.enabled ? "text-white/60" : "text-white/30",
+                    )}
                   >
                     {source.enabled
-                      ? copy.sources.disable
-                      : copy.sources.enable}
-                  </SpaceButton>
-                  <SpaceButton
-                    variant="outline"
-                    size="sm"
-                    withArrow={false}
-                    disabled={checking === source.key}
-                    onClick={() => check(source.key)}
-                  >
-                    {checking === source.key
-                      ? copy.sources.checking
-                      : copy.sources.check}
-                  </SpaceButton>
-                </div>
-              </div>
+                      ? copy.sources.enabled
+                      : copy.sources.disabled}
+                  </span>
 
-              {latest && (
-                <div className="mt-4 space-y-2 pl-6">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.2em]">
-                    <span className={ok ? "text-accent" : "text-danger"}>
-                      {ok ? copy.sources.reachable : copy.sources.unreachable}
-                    </span>
-                    {source.last_checked_at && (
-                      <span className="text-white/30">
-                        {` · ${copy.sources.checkedAt} `}
-                        {new Date(source.last_checked_at).toLocaleString()}
+                  <div className="ml-auto flex gap-3">
+                    <SpaceButton
+                      variant="ghost"
+                      size="sm"
+                      withArrow={false}
+                      onClick={() => toggle(source)}
+                      className="border-hairline text-white/70"
+                    >
+                      {source.enabled
+                        ? copy.sources.disable
+                        : copy.sources.enable}
+                    </SpaceButton>
+                    <SpaceButton
+                      variant="outline"
+                      size="sm"
+                      withArrow={false}
+                      disabled={checking === source.key}
+                      onClick={() => check(source.key)}
+                    >
+                      {checking === source.key
+                        ? copy.sources.checking
+                        : copy.sources.check}
+                    </SpaceButton>
+                  </div>
+                </div>
+
+                {latest && (
+                  <div className="mt-4 space-y-2 pl-6">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.2em]">
+                      <span className={ok ? "text-accent" : "text-danger"}>
+                        {ok ? copy.sources.reachable : copy.sources.unreachable}
                       </span>
-                    )}
-                  </p>
-
-                  {typeof latest.error === "string" && (
-                    <p className="font-mono text-[11px] leading-relaxed break-words text-danger">
-                      {latest.error}
+                      {source.last_checked_at && (
+                        <span className="text-white/30">
+                          {` · ${copy.sources.checkedAt} `}
+                          {new Date(source.last_checked_at).toLocaleString()}
+                        </span>
+                      )}
                     </p>
-                  )}
-                  {typeof latest.warning === "string" && (
-                    <p className="font-mono text-[11px] leading-relaxed break-words text-accent">
-                      {latest.warning}
-                    </p>
-                  )}
 
-                  {tools && (
-                    <details className="group">
-                      <summary className="cursor-pointer font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white">
-                        {copy.sources.toolsExposed(tools.length)}
-                      </summary>
-                      <p className="mt-2 font-mono text-[11px] leading-relaxed break-words text-white/40">
-                        {tools.join(", ")}
+                    {typeof latest.error === "string" && (
+                      <p className="font-mono text-[11px] leading-relaxed break-words text-danger">
+                        {latest.error}
                       </p>
-                    </details>
-                  )}
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+                    )}
+                    {typeof latest.warning === "string" && (
+                      <p className="font-mono text-[11px] leading-relaxed break-words text-accent">
+                        {latest.warning}
+                      </p>
+                    )}
+
+                    {tools && (
+                      <details className="group">
+                        <summary className="cursor-pointer font-display text-[10px] uppercase tracking-[0.28em] text-white/40 transition-colors duration-300 hover:text-white">
+                          {copy.sources.toolsExposed(tools.length)}
+                        </summary>
+                        <p className="mt-2 font-mono text-[11px] leading-relaxed break-words text-white/40">
+                          {tools.join(", ")}
+                        </p>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

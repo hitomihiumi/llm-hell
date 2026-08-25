@@ -1,6 +1,7 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
+import { type AgentMode, needsApproval } from "./agentMode";
 import { ApiError, type KnowledgeBaseClient } from "./client";
 import {
   COMMAND_TIMEOUT_MS,
@@ -163,9 +164,38 @@ function workspaceFolder(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
-export async function executeTool(call: ToolCall, client: KnowledgeBaseClient): Promise<string> {
+/**
+ * How a tool asks permission.
+ *
+ * The default is a VS Code modal, which is right for the native `@coder`
+ * participant: it has no surface of its own to draw a question on. The chat
+ * view passes its own and renders the question as a card in the transcript
+ * instead, which is the difference between being interrupted by the editor
+ * and being asked by the thing you are talking to.
+ */
+export type ToolConfirmer = (
+  call: ToolCall,
+  args: Record<string, unknown>,
+  summary: string,
+) => Promise<boolean>;
+
+export async function executeTool(
+  call: ToolCall,
+  client: KnowledgeBaseClient,
+  mode: AgentMode = "manual",
+  confirm?: ToolConfirmer,
+): Promise<string> {
   const args = parseArgs(call.function.arguments);
-  if (!(await confirmTool(call, args))) {
+  if (
+    mode === "autonomous" &&
+    ["read_file", "write_file", "list_directory"].includes(call.function.name)
+  ) {
+    const uri = resolveUri(String(args.path ?? ""));
+    if (!vscode.workspace.getWorkspaceFolder(uri)) {
+      return "Blocked: autonomous mode only permits workspace paths.";
+    }
+  }
+  if (!(await confirmTool(call, args, mode, confirm))) {
     return `Cancelled: ${call.function.name}`;
   }
 
@@ -272,17 +302,26 @@ export async function executeTool(call: ToolCall, client: KnowledgeBaseClient): 
   }
 }
 
-async function confirmTool(call: ToolCall, args: Record<string, unknown>): Promise<boolean> {
+async function confirmTool(
+  call: ToolCall,
+  args: Record<string, unknown>,
+  mode: AgentMode,
+  ask?: ToolConfirmer,
+): Promise<boolean> {
+  if (!needsApproval(mode, call.function.name)) return true;
+
   const confirm = vscode.workspace
     .getConfiguration("knowledgeBase")
     .get<boolean>("coder.confirmTools", true);
   if (!confirm) return true;
-  if (call.function.name !== "write_file" && call.function.name !== "run_terminal") return true;
 
   const summary =
     call.function.name === "write_file"
       ? `Write to ${String(args.path ?? "unknown")}`
       : `Run command: ${String(args.command ?? "")}`;
+
+  if (ask) return ask(call, args, summary);
+
   const answer = await vscode.window.showWarningMessage(
     `@coder wants to ${summary}`,
     { modal: true },

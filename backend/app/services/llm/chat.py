@@ -173,6 +173,7 @@ async def stream_deltas(
     temperature: float = 0.2,
     timeout: float = 300.0,
     tools: list[dict[str, Any]] | None = None,
+    extra_body: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield each parsed SSE event from a streaming completion.
 
@@ -184,7 +185,15 @@ async def stream_deltas(
     request = http_client.build_request(
         "POST",
         _url(endpoint),
-        json=_body(endpoint, messages, max_tokens=max_tokens, temperature=temperature, stream=True, tools=tools),
+        json=_body(
+            endpoint,
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True,
+            tools=tools,
+            extra=extra_body,
+        ),
         headers=_headers(endpoint),
         timeout=timeout,
     )

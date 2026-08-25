@@ -86,6 +86,16 @@ AGENT_SYSTEM_PROMPT = (chr(10) * 2).join(
         "If a search genuinely finds nothing, say so. Do not fall back to a shell command "
         "aimed at an external service to work around it.",
         "Prefer small, safe steps. Explain what you are doing briefly.",
+        "Before writing or editing code, stop and think: describe your plan in a short reasoning block. "
+        "Name the files you will touch, the functions or classes you will change, and any assumptions you are making.",
+        "After writing any non-trivial code, verify it in place before moving on. Use read_file to re-read the file you just wrote, "
+        "look for syntax errors, missing imports, off-by-one mistakes, and mismatched types. If you see a problem, fix it immediately "
+        "rather than leaving it for a later turn.",
+        "When a change spans multiple files, update them in a logical order and confirm each one compiles or parses before proceeding. "
+        "For Python that means checking imports; for TypeScript/JavaScript that means checking for obvious syntax errors.",
+        "If a command or test fails, do not pretend it succeeded. Read the error output, diagnose the cause, and either fix the issue "
+        "or explain clearly why it cannot be fixed with the tools available.",
+        "Keep the user's goal in mind at every turn. If a requested change conflicts with existing code or architecture, say so before applying it.",
     ]
 )
 
@@ -366,9 +376,7 @@ async def chat_completions(
 
 
 def _prepare_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Prepend the agent system prompt when there is no system message."""
-    if messages and messages[0].get("role") == "system":
-        return messages
+    """Keep the server guardrails and append client environment metadata."""
     return [{"role": "system", "content": AGENT_SYSTEM_PROMPT}, *messages]
 
 
@@ -412,6 +420,7 @@ async def _stream_agent(
         max_tokens=settings.agent_max_output_tokens,
         temperature=settings.agent_temperature,
         tools=tools,
+        extra_body=settings.agent_extra_body or None,
     ):
         event.setdefault("id", chunk_id)
         if "model" in event:

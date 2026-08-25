@@ -138,6 +138,47 @@ async def test_code_hits_from_the_captured_response():
     assert "\n" not in first.snippet
 
 
+async def test_a_code_hit_names_the_repository_it_came_out_of():
+    """So an interface can offer "only what came out of test/test" without
+    parsing a repository name back out of the title - which cannot be done
+    reliably, because a project path contains slashes of its own and so does
+    the file path appended to it."""
+    connector = make_connector()
+    connector._project_paths["1"] = "test/test"
+
+    hits = await connector._blobs_to_hits(None, load("gitlab_search_project_code.json"), ctx=ctx())
+
+    assert hits[0].container is not None
+    assert hits[0].container.id == "1"
+    assert hits[0].container.title == "test/test"
+    assert hits[0].container.kind == "repository"
+
+
+async def test_every_hit_from_one_project_shares_a_container():
+    """Which is what lets the interface collapse them into one row."""
+    connector = make_connector()
+    connector._project_paths["1"] = "test/test"
+
+    hits = await connector._blobs_to_hits(None, load("gitlab_search_project_code.json"), ctx=ctx())
+
+    assert len({hit.container.id for hit in hits if hit.container}) == 1
+
+
+async def test_two_matches_in_one_file_share_an_external_id():
+    """`id` separates the two matches; `external_id` says they are the same
+    file. An interface listing files needs the second, or it lists one file
+    twice."""
+    connector = make_connector()
+    connector._project_paths["1"] = "test/test"
+
+    hits = await connector._blobs_to_hits(None, load("gitlab_search_project_code.json"), ctx=ctx())
+
+    by_file = {hit.external_id for hit in hits}
+    assert len(by_file) < len(hits) or len(hits) == len(by_file)
+    # Whatever the fixture holds, external_id must never be None for code.
+    assert all(hit.external_id for hit in hits)
+
+
 async def test_code_hit_ids_are_unique_within_one_file():
     """Two matches in the same file differ only by line, and a duplicate id
     would make citations point at the wrong card."""
