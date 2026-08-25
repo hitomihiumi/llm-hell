@@ -26,6 +26,7 @@ from app.core.sessions import CurrentUser
 from app.models.endpoint import ModelEndpoint
 from app.models.source import SOURCE_GITLAB, SOURCE_GOOGLE_DRIVE, SOURCE_POSTGRES_KB
 from app.schemas.content import ContentOut
+from app.services import credentials as credential_service
 from app.services.mcp.connector import SearchContext
 from app.services.mcp.gitlab import GitLabConnector
 from app.services.mcp.google import GoogleWorkspaceConnector
@@ -64,11 +65,22 @@ async def get_content(
     # the answer could cite a diagram the reader then could not find.
     settings = get_settings()
     endpoints = list((await db.execute(select(ModelEndpoint))).scalars().all())
+    # As the caller, not as the deployment. Opening a hit they found in
+    # their own Drive on somebody else's credentials would 404 - or, worse,
+    # succeed against a file of the same id that is not theirs.
+    google_account = await credential_service.secret_for(
+        db, user=current, provider="google", settings=settings
+    )
+    gitlab_token = await credential_service.secret_for(
+        db, user=current, provider="gitlab", settings=settings
+    )
     ctx = SearchContext(
         db=db,
         user=current,
         http_client=http_client,
         vision_endpoint=answer_service.select_vision_endpoint(endpoints, settings),
+        tokens={"gitlab": gitlab_token} if gitlab_token else {},
+        google_account=google_account,
     )
 
     try:

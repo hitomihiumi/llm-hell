@@ -9,6 +9,28 @@ from pydantic import BaseModel, ConfigDict, Field
 HitKind = Literal["document", "email", "code", "repository", "commit", "row", "unknown"]
 
 
+class HitContainer(BaseModel):
+    """The larger thing a hit lives inside, when it lives inside one.
+
+    A code hit belongs to a repository; a database row belongs to a table.
+    A Drive document belongs to nothing - it *is* the thing - and so carries
+    no container rather than being forced into a group of one.
+
+    This is set by the connector that knows, and it exists so the interfaces
+    do not have to guess. Both the web app and the extension want to offer
+    "show me only what came out of auth-service", and the alternative was two
+    copies of a heuristic that reads a repository name back out of a title
+    string - wrong the moment a project is renamed or a path contains a
+    slash the parser did not expect.
+    """
+
+    # Stable within a source: the project id, the table name. Not globally
+    # unique, so interfaces key on (source, id).
+    id: str
+    title: str
+    kind: Literal["repository", "table", "folder", "mailbox"] = "repository"
+
+
 class SearchHit(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -17,7 +39,13 @@ class SearchHit(BaseModel):
     id: str
     source: str
     kind: HitKind = "unknown"
+    # Identifies the *document* across a response, where `id` identifies one
+    # hit within it: two matches in different parts of the same file share an
+    # external_id and differ by id. That is what lets an interface collapse
+    # them into one row rather than listing the same file twice.
     external_id: str | None = None
+    # The repository or table this hit came out of, when it came out of one.
+    container: HitContainer | None = None
 
     title: str
     snippet: str = ""
@@ -126,6 +154,9 @@ class AnswerOut(BaseModel):
     hits_used: int = 0
     hits_dropped: int = 0
     hallucinated_citations: int = 0
+    # Hits the answer actually cited, as opposed to every hit returned by search
+    # or merely packed into the model context.
+    cited_hit_ids: list[str] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):

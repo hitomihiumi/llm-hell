@@ -19,6 +19,7 @@ fixture in `tests/conftest.py` does exactly that.
 """
 
 from functools import lru_cache
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -30,6 +31,16 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://llmhell:llmhell@localhost:5432/llmhell"
 
     use_mock_vllm: bool = True
+
+    # --- Per-user credentials ---------------------------------------------
+    # A Fernet key, and the only thing standing between a database dump and
+    # every user's Google refresh token. Empty disables per-user credentials
+    # entirely: the sources then use the deployment-wide tokens they always
+    # did, which is the correct behaviour for a single-tenant install rather
+    # than a degraded one.
+    #
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    credentials_encryption_key: str = ""
 
     # --- Web session auth -------------------------------------------------
     session_cookie_name: str = "kb_session"
@@ -69,10 +80,42 @@ class Settings(BaseSettings):
     answer_ctx_reserve_tokens: int = 2048
     answer_temperature: float = 0.7
 
+    # --- Coding agent (tool-calling LLM) ----------------------------------
+    # Empty means "the same endpoint answer_model_id resolves to". Set it to
+    # a ModelEndpoint.model_id to pin a different model for @coder.
+    agent_model_id: str = ""
+    agent_max_output_tokens: int = 4096
+    agent_temperature: float = 0.2
+    # Extra fields merged into the upstream agent request, as JSON.
+    #
+    # Exists for OpenRouter's provider routing. The agent reliably stops
+    # writing mid-word to emit a tool call - "що виводить приві", then
+    # `write_file` - and every request measured landed on the same provider,
+    # so whether that is the model or that provider is a question this makes
+    # answerable:
+    #
+    #   AGENT_EXTRA_BODY={"provider": {"ignore": ["Relace"]}}
+    #
+    # Merged last, so it can override any default the body builder sets.
+    agent_extra_body: dict[str, Any] = {}
+
     # --- Search federation ------------------------------------------------
     # Wall clock for one source's entire search(), which may span several
-    # tool calls. Must exceed mcp_call_timeout_seconds.
-    search_timeout_seconds: float = 20.0
+    # tool calls.
+    #
+    # **Must exceed mcp_call_timeout_seconds**, and for a long time did not:
+    # 20 against a 25-second call timeout meant a single slow call could never
+    # fail on its own terms. The source was cut first, and cut whole - one
+    # unlucky Drive request took the entire result list with it and the answer
+    # read "there is no Gantt chart in the search results" about a spreadsheet
+    # sitting in the account.
+    #
+    # 30 is not arbitrary either. Drive's search runs once per planned
+    # phrasing, each enriching its top hits, and measured against a live
+    # account that comes to 11-17 seconds with the per-request cache in place
+    # and occasionally more. A budget has to clear the slow end of the real
+    # distribution, not the median.
+    search_timeout_seconds: float = 30.0
     search_per_source_limit: int = 10
     search_total_limit: int = 40
     # Reciprocal-rank-fusion constant. 60 is the value from the original RRF

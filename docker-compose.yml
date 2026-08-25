@@ -99,8 +99,21 @@ services:
       STREAMABLE_HTTP: "true"
       HOST: "0.0.0.0"
       PORT: "3002"
-      GITLAB_PERSONAL_ACCESS_TOKEN: ${GITLAB_PERSONAL_ACCESS_TOKEN:-}
+      # NOT passed any more, and that is the point. In REMOTE_AUTHORIZATION
+      # mode the server takes its GitLab credential from each request, so the
+      # api container decides whose token to use - the caller's own, or the
+      # deployment's when they have not connected one. A server-side PAT here
+      # would be dead configuration that looks live.
       GITLAB_API_URL: ${GITLAB_API_URL:-https://gitlab.com/api/v4}
+      # Per-request credentials. Without this the server reads `private-token`
+      # off a request and ignores it, using its own env PAT for everybody -
+      # which looks exactly like per-user auth working and is not. Measured:
+      # a deliberately wrong token still returned the same two hits.
+      #
+      # There is no middle setting. With this on, a request carrying no token
+      # gets no GitLab access at all (`buildAuthHeaders` returns `{}`), so the
+      # fallback to the deployment's token lives in the connector instead.
+      REMOTE_AUTHORIZATION: "true"
       # Read-only: this is a search integration and has no business
       # creating issues or pushing commits.
       GITLAB_PERMISSION_MODE: readonly
@@ -122,6 +135,18 @@ services:
       # which looks exactly like an auth failure and is not one. The
       # loopback entries keep tools/mcp_probe.py working from the host.
       MCP_ALLOWED_HOSTS: gitlab-mcp:3002,localhost:3102,127.0.0.1:3102
+      # The server rate-limits per client IP, and there is exactly one client
+      # here - the api container - so the default budget is shared by every
+      # user of the deployment rather than protecting anything from any of
+      # them. One question fans out into several planned queries, each
+      # searching several projects, and the tail of that fan reliably came
+      # back `429 Too Many Requests`: GitLab results silently missing from an
+      # answer that then said the repository held nothing.
+      #
+      # The thing actually being protected is the GitLab instance upstream,
+      # and it does its own rate limiting. This budget only has to be larger
+      # than one search's fan-out.
+      MAX_REQUESTS_PER_MINUTE: "600"
     extra_hosts:
       # The GitLab being searched runs on the host, outside this compose
       # project, so GITLAB_API_URL points at host.docker.internal.

@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,9 @@ from app.schemas.search import (
     SearchRequest,
     SearchResponse,
 )
+from app.services import credentials as credential_service
+from app.services.llm.coding_provider import CODING_PROVIDER_MODEL_ID
+from app.services.llm.coding_provider import chat_completions as coding_chat_completions
 from app.services.mcp.connector import SearchContext
 from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.registry import McpRegistry, get_mcp_registry
@@ -110,6 +113,7 @@ def _to_answer_out(result: answer_service.AnswerResult) -> AnswerOut:
         hits_used=result.hits_used,
         hits_dropped=result.hits_dropped,
         hallucinated_citations=result.hallucinated_citations,
+        cited_hit_ids=result.cited_hit_ids,
     )
 
 
@@ -159,6 +163,22 @@ async def _page_images(
     return images
 
 
+async def _caller_credentials(db: AsyncSession, user, settings) -> tuple[dict[str, str], str | None]:
+    """The caller's own tokens, for a search that runs as them.
+
+    Empty when they have connected nothing, which is not a degraded state:
+    the connectors then use the deployment-wide credentials they always did.
+    """
+    gitlab = await credential_service.secret_for(
+        db, user=user, provider="gitlab", settings=settings
+    )
+    google = await credential_service.secret_for(
+        db, user=user, provider="google", settings=settings
+    )
+    tokens = {"gitlab": gitlab} if gitlab else {}
+    return tokens, google
+
+
 @router.post("/search", response_model=SearchResponse)
 async def search(
     payload: SearchRequest,
@@ -169,6 +189,7 @@ async def search(
 ) -> SearchResponse:
     settings = get_settings()
     endpoint, vision = await _endpoints(db, settings)
+    tokens, google_account = await _caller_credentials(db, current, settings)
     ctx = SearchContext(
         db=db,
         user=current,
@@ -176,6 +197,8 @@ async def search(
         answer_endpoint=endpoint,
         vision_endpoint=vision,
         debug=payload.debug,
+        tokens=tokens,
+        google_account=google_account,
     )
 
     queries = await planner.plan_queries(
@@ -247,10 +270,13 @@ async def search_stream(
 
     async def events() -> AsyncIterator[bytes]:
         endpoint, vision = await _endpoints(db, settings)
+        tokens, google_account = await _caller_credentials(db, current, settings)
         ctx = SearchContext(
             db=db,
             user=current,
             http_client=http_client,
+            tokens=tokens,
+            google_account=google_account,
             answer_endpoint=endpoint,
             vision_endpoint=vision,
             debug=payload.debug,
@@ -336,7 +362,8 @@ async def search_stream(
                     "duration_ms": int((time.monotonic() - started_at) * 1000) + federated.duration_ms,
                     "hits_used": final.hits_used,
                     "hits_dropped": final.hits_dropped,
-                    "hallucinated_citations": final.hallucinated_citations,
+                     "hallucinated_citations": final.hallucinated_citations,
+                     "cited_hit_ids": final.cited_hit_ids,
                     "tokens_prompt": final.prompt_tokens,
                     "tokens_completion": final.completion_tokens,
                 },
@@ -352,6 +379,32 @@ async def search_stream(
             # stream into one delivery at the end.
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post("/chat/completions")
+async def chat_completions(
+    request: Request,
+    current: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+    registry: McpRegistry = Depends(get_mcp_registry),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+) -> Response:
+    """Session-authenticated OpenAI-compatible chat completions.
+
+    The extension is already signed in with a cookie, so this exposes the
+    backend's coding provider (`llmhell/coder`) without asking the user for an
+    API key.
+    """
+    body = await request.json()
+    body.setdefault("model", CODING_PROVIDER_MODEL_ID)
+    return await coding_chat_completions(
+        body,
+        db=db,
+        user=current,
+        settings=get_settings(),
+        registry=registry,
+        http_client=http_client,
     )
 
 

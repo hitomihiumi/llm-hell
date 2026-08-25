@@ -270,6 +270,20 @@ two have already collided, `rm -rf .next` and restart `pnpm dev`.
 build on :3002, which is how a page can be checked without touching the dev
 server at all.
 
+```bash
+cd vscode-extension
+pnpm install
+pnpm test         # no extension host needed - see its README for why
+pnpm build && code --extensionDevelopmentPath=.
+```
+
+`@kb` in the editor's chat panel searches the same `/api/*` the web app does,
+signing in with a cookie session rather than a bearer key, so it needs no
+change on the backend. It streams `/api/search/stream`, which is what lets the
+results appear before the answer is written, and hands the panel's transcript
+to the query planner - which is the whole reason it is a chat participant and
+not another search box. See `vscode-extension/README.md`.
+
 Tests use in-memory SQLite, so **no Postgres-only column types** may appear
 in `app/models/` — no `JSONB`, `ARRAY`, `UUID`, `TSVECTOR`. The first one
 added takes the whole API-level suite down with it.
@@ -290,7 +304,8 @@ backend/
   manage.py            operator CLI: users, keys, endpoints, sources
   app/
     api/               auth, search, sources, records, debug, openai_proxy, metrics
-    core/              config, db, security, sessions (cookie), api_keys (bearer)
+    core/              config, db, security, sessions (cookie), api_keys (bearer),
+                       crypto (per-user credentials at rest)
     models/            User, UserSession, Source, SearchQuery, ModelEndpoint, LlmRequest
     services/
       mcp/             transport (the ONLY file importing the MCP SDK),
@@ -305,8 +320,22 @@ frontend/src/
 docker/
   google-mcp/          the stdio->HTTP bridged Google server
   postgres/initdb/     kb database, kb_ro role, demo corpus
+vscode-extension/
+  src/chat.ts          the @kb chat participant: transcript in, streamed answer out
+  src/coder.ts         the @coder agent loop: tool calls out, tool results back in
+  src/chatView.ts      the sidebar chat - a second renderer, not a second backend
+  src/webview/         the panel's own script and its pure HTML-building pieces
+  src/markdown.ts      the panel's own Markdown renderer - escapes first, always
+  src/tools.ts         what it may do locally - files, terminal, and the KB search
+  src/toolOutput.ts    caps and path rules for tool results - pure, so tested
+  src/toolCallAggregator.ts  reassembles a streamed tool call - shared by both UIs
+  src/credentials.ts   connect Google and GitLab as yourself
+  src/sse.ts           the event-stream parser - pure, so node --test runs it
+  src/format.ts        answer document, citation links, history mapping - pure
+  src/http.ts          cookies and base URLs - pure, same reason
+  src/client.ts        signs in the way the web app does; no server change needed
 tools/mcp_probe.py     standalone MCP prober
-docs/                  spike findings, Google runbook, test-database runbook, proxy notes
+docs/                  spike findings, Google runbook, per-user credentials, proxy notes
 ```
 
 All code, comments and developer docs are in English.

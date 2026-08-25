@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -6,6 +8,10 @@ from app.api.openai_proxy import get_http_client
 from app.main import app as fastapi_app
 from app.models.endpoint import DEFAULT_REASONING_PROFILE, ModelEndpoint
 from app.models.llm_request import LlmRequest
+from app.schemas.search import SearchHit
+from app.services.llm import coding_provider
+from app.services.mcp.registry import McpRegistry, get_mcp_registry
+from app.services.search.service import FederatedSearch
 
 
 async def _seed_endpoint(test_db_engine, **overrides) -> str:
@@ -50,7 +56,8 @@ async def test_list_models_publishes_one_id_per_endpoint(authed_client, test_db_
     response = await authed_client.get("/v1/models")
     assert response.status_code == 200
     ids = {m["id"] for m in response.json()["data"]}
-    assert ids == {"glm-4.7"}
+    # The backend itself is advertised as a synthetic coding provider.
+    assert ids == {"glm-4.7", coding_provider.CODING_PROVIDER_MODEL_ID}
 
 
 @pytest.mark.asyncio
@@ -59,7 +66,7 @@ async def test_list_models_unaffected_by_levels_config(authed_client, test_db_en
 
     response = await authed_client.get("/v1/models")
     ids = {m["id"] for m in response.json()["data"]}
-    assert ids == {"glm-4.7"}
+    assert ids == {"glm-4.7", coding_provider.CODING_PROVIDER_MODEL_ID}
 
 
 @pytest.mark.asyncio
@@ -258,3 +265,107 @@ async def test_chat_completions_session_id_falls_back_without_header(authed_clie
     async with session_maker() as session:
         row = (await session.execute(select(LlmRequest))).scalars().first()
         assert row.session_id.startswith("fallback-")
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_coding_provider_non_streaming(authed_client, test_db_engine) -> None:
+    """The backend can answer as an OpenAI-compatible model via its own RAG."""
+    await _seed_endpoint(test_db_engine)
+    fastapi_app.dependency_overrides[get_mcp_registry] = lambda: MagicMock(spec=McpRegistry)
+
+    federated = FederatedSearch(
+        query_id="q-1",
+        query="hello",
+        hits=[SearchHit(id="kb:1", source="postgres_kb", title="doc", snippet="body", score=1.0)],
+        source_status=[],
+        duration_ms=10,
+        queries=["hello"],
+    )
+    answer = coding_provider.answer_service.AnswerResult(
+        text="The answer is 42.",
+        model="glm-4.7",
+        prompt_tokens=100,
+        completion_tokens=10,
+    )
+
+    try:
+        with (
+            patch.object(coding_provider.planner, "plan_queries", new=AsyncMock(return_value=["hello"])),
+            patch.object(coding_provider, "federated_search", new=AsyncMock(return_value=(federated, MagicMock()))),
+            patch.object(
+                coding_provider.answer_service, "synthesize", new=AsyncMock(return_value=answer)
+            ),
+        ):
+            response = await authed_client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": coding_provider.CODING_PROVIDER_MODEL_ID,
+                    "stream": False,
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+    finally:
+        fastapi_app.dependency_overrides.pop(get_mcp_registry, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model"] == coding_provider.CODING_PROVIDER_MODEL_ID
+    assert body["choices"][0]["message"]["content"] == "The answer is 42."
+    assert body["usage"]["prompt_tokens"] == 100
+    assert body["usage"]["completion_tokens"] == 10
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_coding_provider_streaming(authed_client, test_db_engine) -> None:
+    await _seed_endpoint(test_db_engine)
+    fastapi_app.dependency_overrides[get_mcp_registry] = lambda: MagicMock(spec=McpRegistry)
+
+    federated = FederatedSearch(
+        query_id="q-2",
+        query="hi",
+        hits=[],
+        source_status=[],
+        duration_ms=5,
+        queries=["hi"],
+    )
+    final = coding_provider.answer_service.AnswerResult(
+        text="hello world",
+        model="glm-4.7",
+        prompt_tokens=50,
+        completion_tokens=5,
+    )
+
+    async def fake_stream(*args, **kwargs):
+        yield "token", {"text": "hello "}
+        yield "token", {"text": "world"}
+        yield "done", final
+
+    try:
+        with (
+            patch.object(coding_provider.planner, "plan_queries", new=AsyncMock(return_value=["hi"])),
+            patch.object(coding_provider, "federated_search", new=AsyncMock(return_value=(federated, MagicMock()))),
+            patch.object(
+                coding_provider.answer_service, "synthesize_stream", side_effect=fake_stream
+            ),
+        ):
+            async with authed_client.stream(
+                "POST",
+                "/v1/chat/completions",
+                json={
+                    "model": coding_provider.CODING_PROVIDER_MODEL_ID,
+                    "stream": True,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            ) as response:
+                assert response.status_code == 200
+                raw = ""
+                async for chunk in response.aiter_text():
+                    raw += chunk
+    finally:
+        fastapi_app.dependency_overrides.pop(get_mcp_registry, None)
+
+    assert 'data: {"id":' in raw
+    assert '"content": "hello "' in raw
+    assert '"content": "world"' in raw
+    assert '"finish_reason": "stop"' in raw
+    assert "data: [DONE]\n\n" in raw

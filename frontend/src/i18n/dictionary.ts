@@ -81,6 +81,19 @@ export interface Copy {
     hideText: string;
     kinds: Record<string, string>;
   };
+  sourceFilter: {
+    all: string;
+    allResults: string;
+    usedOnly: string;
+    onlyTitle: (source: string) => string;
+  };
+  documentFilter: {
+    title: string;
+    clear: string;
+    usedTitle: string;
+    expand: (name: string) => string;
+    collapse: (name: string) => string;
+  };
   badge: {
     hits: string[];
     unavailable: string;
@@ -88,6 +101,8 @@ export interface Copy {
     fallback: string;
     fallbackTitle: string;
     generatedSql: string;
+    cited: string;
+    citedTitle: string;
   };
   viewer: {
     pages: (count: number) => string;
@@ -122,6 +137,9 @@ export interface Copy {
     checkFailed: string;
     updateFailed: string;
     loadFailed: string;
+    loading: string;
+    empty: string;
+    retry: string;
   };
 }
 
@@ -203,6 +221,19 @@ const en: Copy = {
       unknown: "Item",
     },
   },
+  sourceFilter: {
+    all: "All sources",
+    allResults: "All results",
+    usedOnly: "Used in answer",
+    onlyTitle: (source) => `Show only ${source}`,
+  },
+  documentFilter: {
+    title: "Repositories and documents",
+    clear: "Show all",
+    usedTitle: "The answer cites something here.",
+    expand: (name) => `Show the files in ${name}`,
+    collapse: (name) => `Hide the files in ${name}`,
+  },
   badge: {
     hits: ["hit", "hits"],
     unavailable: "unavailable",
@@ -211,6 +242,8 @@ const en: Copy = {
     fallbackTitle:
       "The model did not produce usable SQL, so a deterministic keyword query was used instead.",
     generatedSql: "Generated SQL",
+    cited: "cited",
+    citedTitle: "The answer actually cites a result from this source.",
   },
   viewer: {
     pages: (count) => `${count} page${count === 1 ? "" : "s"} the answer read`,
@@ -245,6 +278,9 @@ const en: Copy = {
     checkFailed: "The check failed.",
     updateFailed: "The update failed.",
     loadFailed: "Could not load sources.",
+    loading: "Loading sources…",
+    empty: "No knowledge sources are configured.",
+    retry: "Retry",
   },
 };
 
@@ -327,6 +363,19 @@ const uk: Copy = {
       unknown: "Об'єкт",
     },
   },
+  sourceFilter: {
+    all: "Усі джерела",
+    allResults: "Усі результати",
+    usedOnly: "Використано у відповіді",
+    onlyTitle: (source) => `Показати лише ${source}`,
+  },
+  documentFilter: {
+    title: "Репозиторії та документи",
+    clear: "Показати всі",
+    usedTitle: "Відповідь цитує щось звідси.",
+    expand: (name) => `Показати файли в ${name}`,
+    collapse: (name) => `Сховати файли в ${name}`,
+  },
   badge: {
     hits: ["збіг", "збіги", "збігів"],
     unavailable: "недоступне",
@@ -335,6 +384,8 @@ const uk: Copy = {
     fallbackTitle:
       "Модель не видала придатного SQL, тому виконано детермінований пошук за ключовими словами.",
     generatedSql: "Згенерований SQL",
+    cited: "використано",
+    citedTitle: "Відповідь справді цитує результат із цього джерела.",
   },
   viewer: {
     pages: (count) => `${count} сторінок, які читала відповідь`,
@@ -370,6 +421,9 @@ const uk: Copy = {
     checkFailed: "Перевірка не вдалася.",
     updateFailed: "Не вдалося оновити.",
     loadFailed: "Не вдалося завантажити джерела.",
+    loading: "Завантажуємо джерела…",
+    empty: "Джерела бази знань не налаштовані.",
+    retry: "Повторити",
   },
 };
 

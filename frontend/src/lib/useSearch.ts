@@ -15,6 +15,7 @@ export interface SearchRun {
   model: string | null;
   hitsUsed?: number;
   hitsDropped?: number;
+  citedHitIds: string[];
   /** Fan-out finished; the result list can be painted. */
   searching: boolean;
   /** The answer is still being written. */
@@ -30,6 +31,7 @@ export function emptyRun(query: string): SearchRun {
     answer: "",
     reasoning: "",
     citations: [],
+    citedHitIds: [],
     model: null,
     searching: true,
     streaming: false,
@@ -123,6 +125,7 @@ export function useSearchRun() {
                 searching: false,
                 hitsUsed: event.data.hits_used,
                 hitsDropped: event.data.hits_dropped,
+                citedHitIds: event.data.cited_hit_ids ?? current.citedHitIds,
               });
               break;
             case "error":

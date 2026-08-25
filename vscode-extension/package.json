@@ -1,0 +1,349 @@
+{
+  "name": "llmhell-knowledge-base",
+  "displayName": "Knowledge Base (federated search)",
+  "description": "Search Google Workspace, GitLab and the internal knowledge base from the editor, with cited answers.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "llmhell",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "configuration": {
+      "title": "Knowledge Base",
+      "properties": {
+        "knowledgeBase.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "markdownDescription": "Origin of the knowledge-base API. The backend, not the web app \u2014 `http://localhost:8000`, not `:3001`."
+        },
+        "knowledgeBase.username": {
+          "type": "string",
+          "default": "",
+          "description": "Account to sign in as. The password is never stored here; run \"Knowledge Base: Sign In\" and it goes into the editor's secret storage."
+        },
+        "knowledgeBase.sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Source keys to search, e.g. `[\"gitlab\", \"google_drive\"]`. Empty means every enabled source. Also settable per window with \"Knowledge Base: Choose Sources\"."
+        },
+        "knowledgeBase.limit": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "How many results one search may return, across all sources."
+        },
+        "knowledgeBase.answer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask the model for a cited answer as well as the result list. Turning this off makes a search fast and costs no tokens."
+        },
+        "knowledgeBase.searchOnSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pre-fill the search box with the editor selection, or with the symbol under the cursor when nothing is selected."
+        },
+        "knowledgeBase.coder.confirmTools": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask before @coder writes files or runs terminal commands."
+        },
+        "knowledgeBase.coder.maxAgentTurns": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum tool rounds for the coding agent."
+        },
+        "knowledgeBase.coder.mode": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "assisted",
+            "autonomous"
+          ],
+          "default": "manual",
+          "markdownEnumDescriptions": [
+            "Ask before writing a file and before running a command.",
+            "Write files in the workspace without asking; still ask before running a command.",
+            "Ask about nothing. File paths outside the workspace are still refused."
+          ],
+          "description": "Tool approval policy for the coding agent."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "knowledgeBase",
+          "title": "Knowledge Base",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "knowledgeBase": [
+        {
+          "id": "knowledgeBase.chat",
+          "name": "Chat",
+          "type": "webview",
+          "icon": "media/icon.svg"
+        },
+        {
+          "id": "knowledgeBase.results",
+          "name": "Results",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "knowledgeBase.results",
+        "when": "!knowledgeBase.signedIn",
+        "contents": "Searching needs an account on the backend.\n[Sign in](command:knowledgeBase.signIn)\n\nPoint `knowledgeBase.baseUrl` at the API \u2014 the backend on :8000, not the web app on :3001.\n[Open settings](command:workbench.action.openSettings?%22knowledgeBase%22)"
+      },
+      {
+        "view": "knowledgeBase.results",
+        "when": "knowledgeBase.signedIn",
+        "contents": "Ask in the chat panel with **@kb**, and the results land here.\n[Open chat](command:knowledgeBase.openChat)\n\nSearching your own Drive and GitLab needs your accounts connected.\n[Connect accounts](command:knowledgeBase.accounts)\n\nOr search without a conversation:\n[Search](command:knowledgeBase.search)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "knowledgeBase.openCustomChat",
+        "title": "Open Chat",
+        "category": "Knowledge Base",
+        "icon": "$(layout-panel)"
+      },
+      {
+        "command": "knowledgeBase.newChat",
+        "title": "New Chat",
+        "category": "Knowledge Base",
+        "icon": "$(add)"
+      },
+      {
+        "command": "knowledgeBase.chatHistory",
+        "title": "Earlier Conversations",
+        "category": "Knowledge Base",
+        "icon": "$(history)"
+      },
+      {
+        "command": "knowledgeBase.openChat",
+        "title": "Ask in Chat",
+        "category": "Knowledge Base",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "knowledgeBase.openCoderChat",
+        "title": "Ask Coder",
+        "category": "Knowledge Base",
+        "icon": "$(code)"
+      },
+      {
+        "command": "knowledgeBase.search",
+        "title": "Search",
+        "category": "Knowledge Base",
+        "icon": "$(search)"
+      },
+      {
+        "command": "knowledgeBase.searchSelection",
+        "title": "Search for Selection",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.signIn",
+        "title": "Sign In",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.signOut",
+        "title": "Sign Out",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.chooseSources",
+        "title": "Choose Sources",
+        "category": "Knowledge Base",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "knowledgeBase.showAnswer",
+        "title": "Show Last Answer",
+        "category": "Knowledge Base",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "knowledgeBase.refresh",
+        "title": "Run the Last Search Again",
+        "category": "Knowledge Base",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "knowledgeBase.openExternal",
+        "title": "Open in Browser",
+        "category": "Knowledge Base",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "knowledgeBase.copyLink",
+        "title": "Copy Link",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.accounts",
+        "title": "Connect Accounts (Google, GitLab)",
+        "category": "Knowledge Base",
+        "icon": "$(key)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "knowledgeBase.newChat",
+          "when": "view == knowledgeBase.chat",
+          "group": "navigation@0"
+        },
+        {
+          "command": "knowledgeBase.chatHistory",
+          "when": "view == knowledgeBase.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "knowledgeBase.accounts",
+          "when": "view == knowledgeBase.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "knowledgeBase.openChat",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@0"
+        },
+        {
+          "command": "knowledgeBase.search",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@1"
+        },
+        {
+          "command": "knowledgeBase.showAnswer",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@2"
+        },
+        {
+          "command": "knowledgeBase.chooseSources",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@3"
+        },
+        {
+          "command": "knowledgeBase.refresh",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@4"
+        },
+        {
+          "command": "knowledgeBase.accounts",
+          "when": "view == knowledgeBase.results",
+          "group": "navigation@5"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "knowledgeBase.openExternal",
+          "when": "view == knowledgeBase.results && viewItem == hit.linked",
+          "group": "inline"
+        },
+        {
+          "command": "knowledgeBase.copyLink",
+          "when": "view == knowledgeBase.results && viewItem == hit.linked"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "knowledgeBase.searchSelection",
+          "when": "editorHasSelection",
+          "group": "navigation@9"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "knowledgeBase.openExternal",
+          "when": "false"
+        },
+        {
+          "command": "knowledgeBase.copyLink",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "knowledgeBase.searchSelection",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "knowledgeBase.openChat",
+        "key": "ctrl+alt+shift+k",
+        "mac": "cmd+alt+shift+k"
+      },
+      {
+        "command": "knowledgeBase.openCoderChat",
+        "key": "ctrl+alt+shift+c",
+        "mac": "cmd+alt+shift+c"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "knowledgeBase.chat",
+        "name": "kb",
+        "fullName": "Knowledge Base",
+        "description": "Ask across Google Workspace, GitLab and the knowledge base",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "find",
+            "description": "Results only - no answer, no tokens spent"
+          }
+        ]
+      },
+      {
+        "id": "knowledgeBase.coder",
+        "name": "coder",
+        "fullName": "Coder",
+        "description": "Coding assistant backed by the knowledge base",
+        "isSticky": true
+      }
+    ]
+  },
+  "scripts": {
+    "build:extension": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=node20",
+    "build:webview": "esbuild src/webview/main.ts --bundle --outfile=dist/webview.js --format=iife --platform=browser --target=es2022",
+    "build": "pnpm run build:extension && pnpm run build:webview",
+    "watch": "pnpm run build:extension --sourcemap --watch",
+    "watch:webview": "pnpm run build:webview --sourcemap --watch",
+    "package": "pnpm run build:extension --minify && pnpm run build:webview --minify",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check",
+    "format": "biome format --write",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.2",
+    "@types/node": "^20",
+    "@types/vscode": "^1.100.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5"
+  },
+  "packageManager": "pnpm@11.15.1"
+}
