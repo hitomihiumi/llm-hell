@@ -1,5 +1,6 @@
 from app.models.api_key import ApiKey
 from app.models.base import Base
+from app.models.document_chunk import DocumentChunk
 from app.models.document_page import DocumentPage
 from app.models.endpoint import ModelEndpoint
 from app.models.llm_request import LlmRequest
@@ -18,6 +19,7 @@ __all__ = [
     "LlmRequest",
     "Source",
     "SearchQuery",
+    "DocumentChunk",
     "DocumentPage",
     "UserCredential",
 ]

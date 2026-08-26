@@ -95,10 +95,11 @@ Cite more than one where more than one supports the claim: [1][3].
 - Use ONLY the numbers that appear below. Never invent a number.
 - Be concise. Lead with the answer, then the supporting detail.
 - Answer in the SAME language the question is written in.
-- Some results carry page images, labelled with the number that cites them. \
-Read those pages. A question about where something sits, what a diagram \
+- Some results carry page images, introduced as "Result N, page image M". \
+Read those pages: a question about where something sits, what a diagram \
 connects, or what a label says is answered from the picture, not from the \
-text beside it.
+text beside it. Cite a page image as plain [N] - the result number alone, \
+with nothing added inside the brackets.
 - Answer the question that was asked. If it asks where something is, give the \
 position; naming the part instead is not an answer.
 - A spreadsheet arrives as one line per row, every filled cell written \
@@ -163,24 +164,23 @@ def select_endpoint(endpoints: list[ModelEndpoint], settings: Settings) -> Model
 
 
 def select_vision_endpoint(endpoints: list[ModelEndpoint], settings: Settings) -> ModelEndpoint | None:
-    """The endpoint that reads page images, or None when none is configured.
+    """The endpoint that reads page images - which is the answer model itself.
 
-    Deliberately NOT the answer-model fallback that `select_endpoint` uses.
-    Sending a page image to a text-only model does not degrade, it fails - and
-    on a server without multimodal support it fails as a 400 per page. No
-    vision endpoint means no illustrations, which is a document read slightly
-    less well rather than a search that errors.
+    There is deliberately no second model id. **The model that writes the
+    answer is the model that has to see the picture.** A separate vision model
+    can only ever hand over a *description* of a diagram, and an answer written
+    from a description is precisely the failure this path exists to remove: ask
+    which side of the MCU the USB port is on, and a transcription that did not
+    happen to mention it turns into "the documents contain no information about
+    that" while the board sits legible in the file.
+
+    A deployment whose answer model is text-only turns pictures off with
+    `answer_image_hits = 0` (the answer prompt) and `vision_max_pages = 0`
+    (page transcription). Sending an image to such a model does not degrade,
+    it fails as a 400 per page - so the switch is kept. It is just not a
+    second model.
     """
-    if not settings.vision_model_id:
-        return None
-    for endpoint in endpoints:
-        if endpoint.enabled and endpoint.model_id == settings.vision_model_id:
-            return endpoint
-    logger.warning(
-        "VISION_MODEL_ID=%r matches no enabled endpoint; PDFs will be read without their images",
-        settings.vision_model_id,
-    )
-    return None
+    return select_endpoint(endpoints, settings)
 
 
 def render_hit(index: int, hit: SearchHit, *, snippet_chars: int, grid_chars: int | None = None) -> str:
@@ -278,13 +278,20 @@ def build_prompt(
     context = "\n\n".join(blocks) if blocks else "(no results were found)"
     turn = f"Question: {question}\n\nSearch results:\n\n{context}"
 
-    # Each picture is announced by the number that cites it, so `[2]` means
-    # the same thing whether the model took it from a snippet or from a page.
+    # Each picture names the result it belongs to, so the model can tell
+    # which snippet the page goes with and cite it as that result.
     attachments: list[dict[str, Any]] = []
     for position, hit in enumerate(included, start=1):
         for offset, page in enumerate(images.get(hit.id, []), start=1):
             encoded = base64.b64encode(page).decode("ascii")
-            attachments.append({"type": "text", "text": f"[{position}] page image {offset}:"})
+            # "Result N, page image M", deliberately not "[N] page image M".
+            # A bracketed number here is the citation syntax, and the model
+            # copied the label wholesale - "[1 (page image 2)]" - which the
+            # citation parser does not recognise, so a correct answer came
+            # back with no citations attached at all.
+            attachments.append(
+                {"type": "text", "text": f"Result {position}, page image {offset}:"}
+            )
             attachments.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}})
 
     # A plain string when there is nothing to attach: a text-only server

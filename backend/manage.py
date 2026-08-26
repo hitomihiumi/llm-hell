@@ -70,6 +70,55 @@ async def cmd_set_password(args: argparse.Namespace) -> None:
         print(f"password set for {user.username!r}")
 
 
+async def cmd_index_corpus(args: argparse.Namespace) -> None:
+    """Walk the sources and fill the semantic index.
+
+    Incremental: a document whose content has not changed since it was last
+    indexed is skipped without being embedded, so running this on a schedule
+    costs one listing call per source and nothing else.
+    """
+    import httpx
+
+    from app.core.config import get_settings
+    from app.models.endpoint import ModelEndpoint
+    from app.services.mcp.registry import get_mcp_registry
+    from app.services.search import answer as answer_service
+    from app.services.search.crawl import crawl
+
+    settings = get_settings()
+    async with SessionLocal() as db:
+        user = (await db.execute(select(User).order_by(User.created_at))).scalars().first()
+        if user is None:
+            print("no users exist - create one first", file=sys.stderr)
+            raise SystemExit(1)
+
+        # A file with no text - a drawing, a photograph - has nothing to index
+        # until something describes it. That description makes it findable;
+        # the answer still gets the picture itself.
+        endpoints = list((await db.execute(select(ModelEndpoint))).scalars().all())
+        vision_endpoint = answer_service.select_vision_endpoint(endpoints, settings)
+
+        async with httpx.AsyncClient() as http_client:
+            report = await crawl(
+                db,
+                user=user,
+                registry=get_mcp_registry(),
+                settings=settings,
+                http_client=http_client,
+                sources=args.sources or None,
+                limit_per_source=args.limit,
+                force=args.force,
+                vision_endpoint=vision_endpoint,
+            )
+
+    print(f"indexed {report.indexed} documents ({report.chunks} chunks)")
+    print(f"skipped {report.skipped} unchanged, {report.failed} failed")
+    for source, counts in sorted(report.per_source.items()):
+        print(f"  {source:14} indexed={counts['indexed']} skipped={counts['skipped']} failed={counts['failed']}")
+    for error in report.errors[:20]:
+        print(f"  ! {error}", file=sys.stderr)
+
+
 async def cmd_list_sources(args: argparse.Namespace) -> None:
     async with SessionLocal() as db:
         sources = (await db.execute(select(Source).order_by(Source.key))).scalars().all()
@@ -428,6 +477,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("username")
     p.add_argument("password")
     p.set_defaults(func=cmd_set_password)
+
+    p = subparsers.add_parser(
+        "index-corpus", help="Walk the sources and fill the semantic index"
+    )
+    p.add_argument("--sources", nargs="*", default=[], help="Source keys; default is all crawlable")
+    p.add_argument("--limit", type=int, default=200, help="Documents to list per source")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-embed documents already indexed - needed after an embedding model change",
+    )
+    p.set_defaults(func=cmd_index_corpus)
 
     p = subparsers.add_parser("list-sources", help="List the configured search sources")
     p.set_defaults(func=cmd_list_sources)

@@ -86,6 +86,37 @@ def page_stats(data: bytes) -> list[PageStat]:
     return stats
 
 
+def page_texts(data: bytes) -> list[str]:
+    """The text layer, one string per page.
+
+    `page_stats` already extracts exactly this and then throws it away,
+    keeping only the length. It is kept separate rather than folded in
+    because the two have different costs to a caller: stats are read for
+    every PDF to decide whether to spend a GPU on it, while the text is only
+    wanted when a document is being indexed page by page.
+
+    A page that fails to parse yields an empty string rather than shifting
+    every page after it by one - the index *is* the page number, and a
+    silently renumbered document would attach the wrong picture to the right
+    answer.
+    """
+    from pypdf import PdfReader
+
+    try:
+        reader = PdfReader(io.BytesIO(data))
+    except Exception as exc:  # noqa: BLE001 - a corrupt file is not a crash
+        logger.info("could not read PDF structure: %s", exc)
+        return []
+
+    texts: list[str] = []
+    for page in reader.pages:
+        try:
+            texts.append(page.extract_text() or "")
+        except Exception:  # noqa: BLE001 - one bad page must not lose the rest
+            texts.append("")
+    return texts
+
+
 def select_visual_pages(stats: list[PageStat], *, max_pages: int) -> list[int]:
     """Which pages are worth showing a vision model, most promising first.
 

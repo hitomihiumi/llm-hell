@@ -1,0 +1,422 @@
+{
+  "note": "Curated from the citations recorded against real searches - see build_cases.py for how they were mined and voted on. `label.runs` is how many runs of that question the label rests on; `label.why` records any hand correction. Edit this file directly.",
+  "excluded": {
+    "context-dependent": [
+      9,
+      12,
+      13,
+      14,
+      15,
+      17,
+      19,
+      20,
+      21,
+      24,
+      33,
+      34,
+      36,
+      39
+    ],
+    "document deleted from Drive since the label was mined": [
+      "What is in the test document on Drive?",
+      "Що написано в .env файлі?"
+    ]
+  },
+  "cases": [
+    {
+      "query": "according to the gannt chart when was the team object 3d printed - answer in ukrainian",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "Wisco Wingmen Gantt Chart"
+        }
+      ],
+      "label": {
+        "runs": 10,
+        "why": "gantt chart, 8/10 vote"
+      }
+    },
+    {
+      "query": "Коли ми завершили проектування шасі?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "Діаграма Ганта"
+        },
+        {
+          "source": "google_drive",
+          "title": "Wisco Wingmen Gantt Chart"
+        }
+      ],
+      "label": {
+        "runs": 8,
+        "why": "both gantt documents, 7/8 and 5/8"
+      }
+    },
+    {
+      "query": "Які розміри t motor u7?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "T Motor U7 V2.0 Power Type UAV KV490.png"
+        }
+      ],
+      "label": {
+        "runs": 8,
+        "why": "unanimous 8/8"
+      }
+    },
+    {
+      "query": "З якого боку від MCU розташований USB-порт на платі F722?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "da67b1fab1fc4716e2d81cfa00030e6494ff93c…"
+        }
+      ],
+      "label": {
+        "runs": 7,
+        "why": "unanimous 7/7"
+      }
+    },
+    {
+      "query": "answer in ukrainian - when was the team object 3d print completed?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "Week 8 Progress Report"
+        },
+        {
+          "source": "google_drive",
+          "title": "Week 9 Progress Report"
+        }
+      ],
+      "label": {
+        "runs": 4,
+        "why": "both weekly reports, 4/4 each; retargeted after validate.py found the labelled file deleted"
+      }
+    },
+    {
+      "query": "reciprocal rank fusion",
+      "expect": [
+        {
+          "source": "postgres_kb",
+          "title": "How search federation ranks results"
+        },
+        {
+          "source": "gitlab",
+          "title": "test/test/search/federation.py"
+        }
+      ],
+      "label": {
+        "runs": 2,
+        "why": "cross-source: the runbook and the code that implements it"
+      }
+    },
+    {
+      "query": "Що таке auth-service",
+      "expect": [
+        {
+          "source": "gitlab",
+          "title": "test/auth-service"
+        }
+      ],
+      "label": {
+        "runs": 2,
+        "why": "package.json outvoted by hand: it is the junk hit this set exists to catch"
+      }
+    },
+    {
+      "query": "Якими міркуваннями ми керувалися вибираючи саме конфігураіцію дрону з поворотними двигунами а не якусь іншу?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "Звіт за рік"
+        },
+        {
+          "source": "google_drive",
+          "title": "Week 12 Progress Report"
+        },
+        {
+          "source": "google_drive",
+          "title": "Week 9 Progress Report"
+        }
+      ],
+      "label": {
+        "runs": 2,
+        "why": "2/2 across three documents; retargeted after validate.py found the labelled file deleted"
+      }
+    },
+    {
+      "query": "How do I rotate a leaked GitLab token?",
+      "expect": [
+        {
+          "source": "postgres_kb",
+          "title": "Rotating a leaked GitLab token"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "the other runbook is unrelated"
+      }
+    },
+    {
+      "query": "Why must the KV cache be fp8?",
+      "expect": [
+        {
+          "source": "postgres_kb",
+          "title": "KV cache must be fp8 on DeepSeek V4"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "the F722 datasheet has nothing to do with a KV cache"
+      }
+    },
+    {
+      "query": "auth-service README NestJS Prisma backend frontend",
+      "expect": [
+        {
+          "source": "gitlab",
+          "title": "test/auth-service"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "single run, unambiguous"
+      }
+    },
+    {
+      "query": "in the F722-HD controller on what side is usb port relative to mcu?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "da67b1fab1fc4716e2d81cfa00030e6494ff93c…"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "English phrasing of case 3"
+      }
+    },
+    {
+      "query": "what is in the auth-service readme",
+      "expect": [
+        {
+          "source": "gitlab",
+          "title": "test/auth-service"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "single run, unambiguous"
+      }
+    },
+    {
+      "query": "Занйди на gitlab репозиторій з назвою auth-service та перескажи мені зміст readme",
+      "expect": [
+        {
+          "source": "gitlab",
+          "title": "test/auth-service"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "every mined label was wrong - the search failed outright; corrected against cases 6, 16, 23"
+      }
+    },
+    {
+      "query": "Коли закінчилось проектування шасі?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "Діаграма Ганта"
+        },
+        {
+          "source": "google_drive",
+          "title": "Wisco Wingmen Gantt Chart"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "Week 12 dropped to match the 8-run vote on case 1"
+      }
+    },
+    {
+      "query": "Скільки польских пропелерів ми замовили та яка їх вартість?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "VTOL Parts"
+        },
+        {
+          "source": "google_drive",
+          "title": "Запчастини на замовлення"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "both parts documents"
+      }
+    },
+    {
+      "query": "Що собою являє документ da67b1fab1fc4716e2d81cfa00030e6494ff93ca14158f5e7733226ab928b6df_optim",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "da67b1fab1fc4716e2d81cfa00030e6494ff93c…"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "the RunPod runbook is unrelated"
+      }
+    },
+    {
+      "query": "Як мені треба розпаювати мультироторну збірку на контроллері F722-HD?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "da67b1fab1fc4716e2d81cfa00030e6494ff93c…"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "names the board, so it stands without conversation history"
+      }
+    },
+    {
+      "query": "пошукай дату у діограмі гранта",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "Wisco Wingmen Gantt Chart"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "typos in the question are the point of keeping it"
+      }
+    },
+    {
+      "query": "чи присутній гіроскоп на пдаті F722",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "da67b1fab1fc4716e2d81cfa00030e6494ff93c…"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "typo 'пдаті', names the board"
+      }
+    },
+    {
+      "query": "яку конфігурацію дрону було вибрано?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "Week 8 Progress Report"
+        },
+        {
+          "source": "google_drive",
+          "title": "Design Specification"
+        },
+        {
+          "source": "google_drive",
+          "title": "Week 12 Progress Report"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "single run, three plausible design documents; retargeted after validate.py found the labelled file deleted"
+      }
+    },
+    {
+      "query": "які результати проєктування дрона vertical flight society",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "Звіт за рік"
+        },
+        {
+          "source": "google_drive",
+          "title": "End of Year Report"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "the yearly report in both languages"
+      }
+    },
+    {
+      "query": "які розміри у t motor u7?",
+      "expect": [
+        {
+          "source": "google_drive",
+          "title": "T Motor U7 V2.0 Power Type UAV KV490.png"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "phrasing variant of case 2"
+      }
+    },
+    {
+      "query": "what does the Gmail team say about the inbox",
+      "expect": [
+        {
+          "source": "google_mail",
+          "title": "Tips for using your new inbox"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "gmail re-enabled; mined label stands"
+      }
+    },
+    {
+      "query": "Роскажи які пісьма в мене лежать в поштовій скрині",
+      "expect": [
+        {
+          "source": "google_mail",
+          "title": "Tips for using your new inbox"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "gmail re-enabled; mined label stands"
+      }
+    },
+    {
+      "query": "а які листи мені відправляла команда gmail?",
+      "expect": [
+        {
+          "source": "google_mail",
+          "title": "Tips for using your new inbox"
+        },
+        {
+          "source": "google_mail",
+          "title": "Get the official Gmail app"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "gmail re-enabled; both mined labels stand"
+      }
+    },
+    {
+      "query": "Передивись зміст gmail, та скажи які в мене останні пісьма",
+      "expect": [
+        {
+          "source": "google_mail",
+          "title": "Tips for using your new inbox"
+        }
+      ],
+      "label": {
+        "runs": 1,
+        "why": "gmail re-enabled; every mined label was a postgres_kb runbook - the search failed outright. Retargeted to match cases 22/28."
+      }
+    }
+  ]
+}

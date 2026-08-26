@@ -19,6 +19,7 @@ from app.api.sources import router as sources_router
 from app.core.config import get_settings
 from app.core.seed import run_seed
 from app.services.mcp.registry import close_mcp_registry, get_mcp_registry
+from app.services.search import indexer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("llmhell")
@@ -32,9 +33,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # Builds the connectors and, when google_mcp_mode=stdio, starts the
     # supervisor task that owns that subprocess.
     await get_mcp_registry().start()
+    # Keeps the semantic index current without anyone remembering to run a
+    # command. Started after the registry, because the crawl searches through
+    # the same connectors.
+    indexer_task = indexer.start(settings)
     try:
         yield
     finally:
+        await indexer.stop(indexer_task)
         await close_mcp_registry()
         # The proxy's process-wide httpx client was never closed before,
         # which is harmless at process exit but leaks a connection pool per

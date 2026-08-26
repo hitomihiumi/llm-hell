@@ -24,7 +24,6 @@ from app.core.db import get_db
 from app.core.sessions import CurrentUser, require_csrf
 from app.models.endpoint import ModelEndpoint
 from app.models.search_query import SearchQuery
-from app.models.source import SOURCE_GOOGLE_DRIVE
 from app.models.user import User
 from app.schemas.search import (
     AnswerOut,
@@ -37,9 +36,9 @@ from app.services import credentials as credential_service
 from app.services.llm.coding_provider import CODING_PROVIDER_MODEL_ID
 from app.services.llm.coding_provider import chat_completions as coding_chat_completions
 from app.services.mcp.connector import SearchContext
-from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.registry import McpRegistry, get_mcp_registry
 from app.services.search import answer as answer_service
+from app.services.search import images as image_service
 from app.services.search import planner
 from app.services.search.service import federated_search
 from app.services.stats.recorder import RequestOutcome, record_request
@@ -128,39 +127,19 @@ async def _persist_answer(db: AsyncSession, record: SearchQuery, result: answer_
 async def _page_images(
     hits: list[SearchHit], registry: McpRegistry, settings: Settings
 ) -> dict[str, list[bytes]]:
-    """Page pictures for the PDF hits about to be answered from.
+    """Page pictures for the hits about to be answered from.
 
-    One model, one pass: the pages go into the answer prompt beside the text
-    results rather than being described first by a second model. Nothing sits
-    between the picture and the answer, so nothing a transcriber failed to
-    mention can be lost.
-
-    Bounded by `answer_image_hits` because images are the expensive part of a
-    prompt, and by the page cap inside the connector. Failures are swallowed -
-    an answer written from the text alone is the previous behaviour, not a
-    broken search.
+    A thin adapter over `search.images.page_images`: this half knows how to
+    find a connector, that half knows how to spend the budget. Both routes
+    that answer from search results use the same allocation, so a change to
+    how pages are chosen cannot apply to one and not the other.
     """
-    if not settings.answer_image_hits:
-        return {}
-
-    connector = registry.get(SOURCE_GOOGLE_DRIVE)
-    if not isinstance(connector, GoogleWorkspaceConnector):
-        return {}
-
-    images: dict[str, list[bytes]] = {}
-    for hit in hits:
-        if len(images) >= settings.answer_image_hits:
-            break
-        if hit.source != SOURCE_GOOGLE_DRIVE:
-            continue
-        try:
-            pages = await connector.page_images(hit.id)
-        except Exception as exc:  # noqa: BLE001 - pictures are a bonus
-            logger.warning("could not render pages of %s: %s", hit.id, exc)
-            continue
-        if pages:
-            images[hit.id] = pages
-    return images
+    return await image_service.page_images(
+        hits,
+        renderer_for=lambda source: getattr(registry.get(source), "page_images", None),
+        answer_image_hits=settings.answer_image_hits,
+        vision_max_pages=settings.vision_max_pages,
+    )
 
 
 async def _caller_credentials(db: AsyncSession, user, settings) -> tuple[dict[str, str], str | None]:
