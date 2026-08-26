@@ -242,6 +242,56 @@ page images — that is the price of a correct answer to a question about a
 drawing, and `answer_image_hits` and `vision_max_pages` are the dials if it is
 too high a price for a given deployment.
 
+## The index refreshes itself
+
+`manage.py index-corpus` works, but it is a command somebody has to remember.
+**An index nobody refreshes is worse than no index**: it answers confidently
+from a corpus that has moved on, and there is nothing in a stale answer that
+says so. A document added this morning is simply invisible, and the search
+reports no error while being wrong.
+
+So the crawl runs on a timer inside the API process, started from the
+lifespan after the MCP registry (the crawl searches through the same
+connectors) and cancelled before it on shutdown, so nothing races a pass that
+is halfway through writing rows.
+
+```
+SEMANTIC_INDEX_INTERVAL_MINUTES=30   # 0 turns it off
+```
+
+It does nothing at all unless `SEMANTIC_ENABLED` is on: a deployment not using
+the index should not pay for a crawl of every source it has.
+
+**The timer is cheap because the crawl is incremental.** Every document is
+fingerprinted by length and skipped when that version is already indexed. The
+first automatic pass on a live stack:
+
+```
+semantic index: refreshing every 30 minutes
+semantic index: 1 indexed (1 chunks), 95 unchanged, 0 failed
+```
+
+95 documents cost one listing call per source and no embeddings at all.
+
+Three things this deliberately does *not* do, each for a reason:
+
+- **It does not crawl on startup.** The first pass waits a minute, so a
+  container coming up is not answering its first requests while also reading
+  every source.
+- **It does not stop on a failure.** A source down at 09:00 is usually up at
+  09:30, and a crawl that died on the first refused connection would freeze
+  the index at whatever it held when the network last hiccuped.
+- **It takes no lock.** The compose file runs uvicorn without `--workers` on
+  purpose - the Google MCP server can be a child of this process, and N
+  workers would mean N subprocesses writing one OAuth token file - so there is
+  exactly one of this loop. Scale the API out and this needs a lock before it
+  needs anything else, or every replica crawls the same corpus at once.
+
+Note that the crawl fills the index from every crawlable source regardless of
+whether that source is *enabled for searching*. That is the right way round
+for a semantic-only deployment: the lexical connectors can be switched off
+while their documents still reach the index.
+
 ## How each stage is checked
 
 `backend/evals/run_answers.py` scores the answer stage, not retrieval:
