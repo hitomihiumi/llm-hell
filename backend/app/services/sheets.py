@@ -98,17 +98,164 @@ def parse_report(report: str) -> tuple[str, list[tuple[int, list[str]]]]:
     return heading, rows
 
 
-def render_row(number: int, cells: list[str]) -> str:
-    """One row as `Rn: B=label  G=X`, or "" when the row is empty."""
-    filled = [f"{column_letter(index)}={cell}" for index, cell in enumerate(cells) if cell]
-    return f"R{number}: " + "  ".join(filled) if filled else ""
+def _fill_forward(cells: list[str], width: int) -> list[str]:
+    """A header row with its merged cells written out.
+
+    A calendar header writes the month once, over the fortnight it covers:
+    `R3: C=Jan  E=Feb  I=Mar`. Column K carries no month of its own - it
+    inherits March from column I, and that inheritance is the whole reason a
+    reader has to count columns to place a mark.
+    """
+    out: list[str] = []
+    carried = ""
+    for index in range(width):
+        value = cells[index].strip() if index < len(cells) else ""
+        if value:
+            carried = value
+        out.append(carried)
+    return out
+
+
+def _filled(cells: list[str], width: int) -> int:
+    return sum(1 for cell in cells[:width] if cell.strip())
+
+
+def _occupied(rows: list[tuple[int, list[str]]]) -> list[tuple[int, list[str]]]:
+    """The sheet without its blank rows.
+
+    Real sheets start with one - a spacer above the title, or a frozen row
+    left empty - and it is invisible in the rendered output because empty rows
+    are dropped there too. Counted as part of the header band, though, it is a
+    row in which every column is empty, so every column fails the "the band
+    addresses this column" test and nothing resolves at all. Which is exactly
+    what happened: the resolution worked on a hand-built sheet and did nothing
+    on the real one.
+    """
+    return [(number, cells) for number, cells in rows if any(cell.strip() for cell in cells)]
+
+
+def band_size(rows: list[tuple[int, list[str]]]) -> int:
+    """How many of the leading rows are header rather than data.
+
+    The band ends at its last *dense* row. A merged row - the month written
+    once per fortnight - is sparse, and belongs to the band only because a
+    dense row of dates follows it. A task row is sparse too, and follows
+    nothing, which is what separates the two: `HEADER_ROWS` alone cannot,
+    and a band that swallowed one task row would hang that task's own mark on
+    every column as though it meant something.
+    """
+    rows = _occupied(rows)
+    band = [cells for _, cells in rows[:HEADER_ROWS]]
+    width = max((len(cells) for cells in band), default=0)
+    size = 0
+    for position, cells in enumerate(band):
+        if _filled(cells, width) * 2 > width:
+            size = position + 1
+    return size
+
+
+def _looks_like_grid(rows: list[tuple[int, list[str]]], size: int, width: int) -> bool:
+    """Whether this sheet is a matrix to be read by position, or a table.
+
+    Two things have to hold, and both are about emptiness.
+
+    The band must have a **merged row** - a month written once over the
+    fortnight it covers, a quarter written once per season - because a row
+    that addresses spans rather than columns is what makes a mark's column
+    something a reader has to count to.
+
+    The body must be **sparse**: a Gantt row is a label and one or two marks
+    in an otherwise empty line. A table's rows are full.
+
+    Both, because either alone misfires. Getting this wrong in the permissive
+    direction is what costs: a contact list read as a grid would hang three
+    strangers' names off every name in it.
+    """
+    if size < 2 or width < 4:
+        return False
+    band = [cells for _, cells in rows[:size]]
+    if not any(2 <= _filled(cells, width) <= width // 2 for cells in band):
+        return False
+    body = [cells for _, cells in rows[size:]]
+    if not body:
+        return False
+    sparse = sum(1 for cells in body if _filled(cells, width) <= width // 2)
+    return sparse * 2 >= len(body)
+
+
+def column_context(rows: list[tuple[int, list[str]]]) -> dict[int, list[str]]:
+    """What each column means, read down the header band.
+
+    A Gantt cell says `X` and nothing else. Which week that `X` falls in is
+    written at the top of the sheet, in a band whose merged cells make the
+    column it belongs to a matter of counting - across sixteen columns, in an
+    image, in a model's head. That count is arithmetic we already hold the
+    inputs for, so it is done here: column K is week 9, March, the 16th, and
+    saying so costs one lookup.
+
+    Returns `{column index: [value from each band row]}` for the columns the
+    band fully addresses, and `{}` when the top of the sheet is not a header
+    band at all.
+    """
+    rows = _occupied(rows)
+    size = band_size(rows)
+    band = [cells for _, cells in rows[:size]]
+    width = max((len(cells) for cells in band), default=0)
+    if not _looks_like_grid(rows, size, width):
+        return {}
+    filled = [_fill_forward(cells, width) for cells in band]
+    context: dict[int, list[str]] = {}
+    for index in range(width):
+        values = [row[index] for row in filled]
+        if all(values):
+            context[index] = values
+    return context
+
+
+def render_row(number: int, cells: list[str], context: dict[int, list[str]] | None = None) -> str:
+    """One row as `Rn: B=label  G=X`, or "" when the row is empty.
+
+    With a `context`, a cell whose column the header band addresses carries
+    that meaning inline - `H=X [6 | Feb | 23]` - so nothing downstream has to
+    align it against a band that may be forty rows away, or cropped out of the
+    picture entirely. The row's own label is left bare: it is what the columns
+    are being read against, not something they explain.
+    """
+    positions = [index for index, cell in enumerate(cells) if cell]
+    label = positions[0] if positions else None
+    parts = []
+    for index in positions:
+        piece = f"{column_letter(index)}={cells[index]}"
+        meaning = (context or {}).get(index) if index != label else None
+        if meaning:
+            piece += " [" + " | ".join(meaning) + "]"
+        parts.append(piece)
+    return f"R{number}: " + "  ".join(parts) if parts else ""
+
+
+def render_rows(rows: list[tuple[int, list[str]]]) -> list[tuple[int, str]]:
+    """Every non-empty row, addressed and resolved against the header band.
+
+    The band rows themselves are rendered bare: annotating a header with
+    itself says nothing, and `C=Jan [1 | Jan | 19]` reads as a fourth header
+    row.
+    """
+    context = column_context(rows)
+    rows = _occupied(rows)
+    size = band_size(rows)
+    out = []
+    for position, (number, cells) in enumerate(rows):
+        line = render_row(number, cells, None if position < size else context)
+        if line:
+            out.append((number, line))
+    return out
 
 
 def render(report: str) -> str:
     """The whole sheet, addressed. Empty rows are dropped, order is kept."""
     heading, rows = parse_report(report)
     lines = [f"sheet: {heading}"] if heading else []
-    lines.extend(line for line in (render_row(number, cells) for number, cells in rows) if line)
+    lines.extend(line for _, line in render_rows(rows))
     return "\n".join(lines)
 
 
@@ -127,8 +274,7 @@ def excerpt(report: str, query: str, limit: int) -> str:
     mark means. Whatever budget survives goes to the rest, in order.
     """
     heading, rows = parse_report(report)
-    rendered = [(number, render_row(number, cells)) for number, cells in rows]
-    rendered = [(number, line) for number, line in rendered if line]
+    rendered = render_rows(rows)
     if not rendered:
         return ""
 

@@ -548,3 +548,109 @@ async def test_indexing_a_sheet_uses_the_grid_chunker(db):
     rows = (await db.execute(select(DocumentChunk))).scalars().all()
     assert len(rows) > 1
     assert all(row.text.startswith("sheet: 'Fall Semester'") for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_a_sheet_is_recorded_as_a_grid_by_whoever_cut_it(db):
+    """Not by the caller. The crawler learns a hit's `snippet_format` from the
+    listing, where a spreadsheet has not been rendered yet and reports plain
+    text - and that flag then told the answer prompt to treat a grid as prose,
+    which excerpts a window over the middle and cuts off the header band the
+    grid chunker had just repeated into every chunk."""
+    embedder = FakeEmbedder()
+    async with embedder.client() as client:
+        await semantic.index_document(
+            db, source_key="google_drive", external_id="sheet1", title="Gantt", url=None,
+            text=GRID, settings=settings(), http_client=client,
+            meta={"snippet_format": "text"},  # what the listing wrongly said
+        )
+
+    rows = (await db.execute(select(DocumentChunk))).scalars().all()
+    assert {row.meta["snippet_format"] for row in rows} == {"grid"}
+
+
+@pytest.mark.asyncio
+async def test_prose_is_not_recorded_as_a_grid(db):
+    embedder = FakeEmbedder()
+    async with embedder.client() as client:
+        await semantic.index_document(
+            db, source_key="s", external_id="d", title="t", url=None,
+            text="ordinary prose about a spreadsheet",
+            settings=settings(), http_client=client,
+        )
+
+    rows = (await db.execute(select(DocumentChunk))).scalars().all()
+    assert {row.meta["snippet_format"] for row in rows} == {"text"}
+
+
+@pytest.mark.asyncio
+async def test_search_reports_the_recorded_format(db):
+    """This is what the connector turns into `snippet_format` on the hit, and
+    what stops a grid being excerpted."""
+    embedder = FakeEmbedder()
+    async with embedder.client() as client:
+        await semantic.index_document(
+            db, source_key="google_drive", external_id="sheet1", title="Gantt", url=None,
+            text=GRID, settings=settings(), http_client=client,
+        )
+        found = await semantic.search(
+            db, query="task", settings=settings(), http_client=client, limit=5
+        )
+
+    assert found[0]["snippet_format"] == "grid"
+
+
+# --- workbooks: a tab is not a section of another tab ------------------------
+
+
+FALL = "\n".join(
+    ["sheet: 'Fall Semester'!A1:AL1000", "R2: B=Тиждень  C=1", "R3: C=Вересень  M=Жовтень",
+     "R4: B=Завдання  C=1  D=8", "R5: legend"]
+    + [f"R{n}: B=fall task {n}  C=X" for n in range(6, 40)]
+)
+SPRING = "\n".join(
+    ["sheet: 'Spring Semester'!A1:AL1000", "R2: B=Тиждень  C=1", "R3: C=Березень  M=Квітень",
+     "R4: B=Завдання  C=3  D=10", "R5: legend"]
+    + [f"R{n}: B=spring task {n}  C=X" for n in range(6, 40)]
+)
+WORKBOOK = FALL + "\n" + SPRING
+
+
+def test_a_workbook_splits_into_one_section_per_tab():
+    assert len(semantic.split_tabs(WORKBOOK)) == 2
+
+
+def test_a_single_tab_is_one_section():
+    assert len(semantic.split_tabs(FALL)) == 1
+
+
+def test_no_chunk_carries_two_tabs_headers():
+    """`render_tabs` concatenates every tab. Treating that as one grid took the
+    FIRST tab's header band and prefixed it to every other tab's rows."""
+    chunks = semantic.chunk_grid(WORKBOOK, size=400, overlap=1)
+
+    assert all(piece.count("sheet: ") == 1 for piece in chunks)
+
+
+def test_a_tabs_rows_are_never_filed_under_another_tabs_header():
+    """Measured: five chunks of Spring Semester data carried Fall Semester's
+    months and days, so a question about the second tab was answered from the
+    first - confidently, and about the wrong half of the year."""
+    chunks = semantic.chunk_grid(WORKBOOK, size=400, overlap=1)
+
+    for piece in chunks:
+        if "spring task" in piece:
+            assert "Spring Semester" in piece
+            assert "Березень" in piece
+            assert "Вересень" not in piece
+        if "fall task" in piece:
+            assert "Fall Semester" in piece
+            assert "Вересень" in piece
+
+
+def test_every_tab_reaches_the_index():
+    chunks = semantic.chunk_grid(WORKBOOK, size=400, overlap=1)
+    seen = " ".join(chunks)
+
+    assert "fall task 39" in seen
+    assert "spring task 39" in seen

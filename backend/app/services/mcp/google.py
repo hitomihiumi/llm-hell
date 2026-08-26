@@ -316,11 +316,11 @@ def _workspace_text_mime_type(type_hint: str | None) -> str | None:
 def is_previewable_drive_file(type_hint: str | None) -> bool:
     # Spreadsheets are read through the Sheets API; PDF export of a large
     # sheet reliably hits exportSizeLimitExceeded and gives no useful preview.
-    return (
-        is_pdf(type_hint)
-        or is_image(type_hint)
-        or (is_google_workspace_editor(type_hint) and not is_google_spreadsheet(type_hint))
-    )
+    # Spreadsheets included: a Gantt chart is read far more reliably as a
+    # picture than as a grid addressed by column letter. Whether the export
+    # actually succeeds is decided per file by its size, in
+    # `_should_attempt_pdf_export`.
+    return is_pdf(type_hint) or is_image(type_hint) or is_google_workspace_editor(type_hint)
 
 
 def _image_as_jpeg(data: bytes, quality: int = 85) -> bytes | None:
@@ -1371,10 +1371,20 @@ class GoogleWorkspaceConnector:
             return []
 
         type_hint = await self._type_of(file_id)
-        # Spreadsheets are read through the Sheets API instead; exporting a
-        # large sheet to PDF hits Drive's exportSizeLimitExceeded and produces
-        # noisy logs without giving the model usable content.
-        if is_google_spreadsheet(type_hint):
+        # A spreadsheet is rendered too, and that is a change of mind worth
+        # recording. It used to be refused outright, on the grounds that a
+        # large sheet hits Drive's exportSizeLimitExceeded and produces noise
+        # instead of a preview - true, and the size guard below is what that
+        # reasoning actually justified.
+        #
+        # What it cost was the harder half of every Gantt question. A chart
+        # like that is visual data: an X sits physically under its month.
+        # Reading it from the text rendering means resolving a column letter
+        # across two merged header rows by arithmetic, and the model gets that
+        # wrong - measured, three questions in a row came back with the wrong
+        # month while the right cells were in front of it. Rendered as a page,
+        # the same question is looking at where the mark is.
+        if is_google_spreadsheet(type_hint) and not self._should_attempt_pdf_export(file_id):
             return []
 
         data = await self._fetch_file_bytes(file_id, type_hint)

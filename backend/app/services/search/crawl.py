@@ -51,6 +51,33 @@ PAUSE_SECONDS = 0.4
 GIVE_UP_AFTER = 3
 
 
+# What a failure has to look like to count against the give-up budget.
+#
+# A source that is rate-limiting or unreachable should be abandoned for this
+# run; a file that simply cannot be read should not count at all. Drive holds
+# video, and `manage_docs` answers a request to read an .mp4 with
+# `400 INVALID_ARGUMENT` - correctly, it is not a document. Counting those,
+# three adjacent videos would abandon the entire Drive crawl.
+_SOURCE_IS_FAILING = (
+    "429",
+    "too many requests",
+    "timeout",
+    "timed out",
+    "connection",
+    "unreachable",
+    "econnrefused",
+    "503",
+    "502",
+    "500",
+)
+
+
+def _looks_unreadable(error: str) -> bool:
+    """Whether this failure is one document's problem rather than the source's."""
+    lowered = error.lower()
+    return not any(marker in lowered for marker in _SOURCE_IS_FAILING)
+
+
 @dataclass
 class CrawlReport:
     indexed: int = 0
@@ -85,12 +112,6 @@ def _as_documents(result: Any) -> list[dict[str, Any]]:
             # a semantically-retrieved document still reaches the answer with
             # its images attached: a chunk is text, and a board layout is not.
             "preview_pages": hit.preview_pages,
-            # "grid" when the source rendered a spreadsheet. Carried so a
-            # semantically-retrieved sheet still reaches the answer prompt as
-            # a grid: the prompt's rules for reading merged header rows by
-            # column letter, and the larger character budget a table needs,
-            # both hang off this.
-            "snippet_format": hit.snippet_format,
         }
         for hit in result.hits
         if hit.external_id or hit.id
@@ -141,6 +162,14 @@ async def crawl(
             try:
                 text = await _fetch_text(connector, ctx, external_id, document)
             except Exception as exc:  # noqa: BLE001
+                if _looks_unreadable(str(exc)):
+                    # Not a failure of the source - a file it cannot express as
+                    # text, which a video is. Recorded as skipped so a run of
+                    # them cannot exhaust the give-up budget and abandon every
+                    # document after them.
+                    report.record(source_key, "skipped")
+                    logger.info("nothing readable in %s: %s", external_id, exc)
+                    continue
                 consecutive_failures += 1
                 report.record(source_key, "failed")
                 report.errors.append(f"{source_key}:{external_id}: {exc}")
@@ -204,7 +233,6 @@ async def crawl(
                     meta={
                         "hit_id": document.get("hit_id") or external_id,
                         "preview_pages": document.get("preview_pages"),
-                        "snippet_format": document.get("snippet_format"),
                         # True when the indexed text is a description of a
                         # picture rather than the document's own words. Kept
                         # so it is never mistaken for a quotable source.

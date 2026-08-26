@@ -221,6 +221,14 @@ chunk 0 and every data row in chunks 1 and 2, so a retrieved chunk read
 `R31: B=3D-друк деталей  G=X` — something happened in column G, and the row
 saying G is the 18th of September was in a different chunk entirely.
 
+`chunk_grid` repeats the header band into every chunk, and **the chunker
+records that it did** — `snippet_format` is written by whoever actually cut
+the text, not taken from the caller. The crawler learns a hit's format from
+the *listing*, where a spreadsheet has not been rendered yet and so reports
+plain text; that wrong flag then told the answer prompt to treat a grid as
+prose, which excerpts a window over the middle and cut the header band
+straight back off. The band was being repeated and then discarded.
+
 `chunk_grid` repeats the header band into every chunk. It costs a few hundred
 characters per chunk and is the difference between a row that can be read and
 one that cannot. `snippet_format` is carried through the index too, so a
@@ -231,8 +239,43 @@ window over the middle would cut the band straight back off.
 
 ```
 before   "конкретна дата або термін завершення в цій таблиці відсутні"
-after    "Проєктування шасі було завершено до 3 вересня 2025 року [6]"
+after    "Проєктування фюзеляжу (шасі) було завершено 17 жовтня [15]"
 ```
+
+Checked against the sheet rather than taken on trust: the matching rows are
+`R24 … V=X` and `R33 … U=X`, and the header band reads `R3: C=Вересень
+M=Жовтень Y=Листопад`. Columns U and V fall between M and X, so October is
+the right month — the model resolved a column letter through the band, which
+is the thing that was impossible when the band lived in a different chunk.
+
+### A workbook is not one grid
+
+`sheets.render_tabs` reads every tab and concatenates them, each introduced by
+its own `sheet: 'Name'!range` line. `chunk_grid` treated that as one grid — so
+it took the **first** tab's header band and prefixed it to every other tab's
+rows. Measured on the Gantt workbook: five chunks of Spring Semester data
+carried Fall Semester's months and days, and two chunks contained both tabs at
+once.
+
+The effect is exactly what it sounds like: ask about the second tab and the
+answer is confident, cites the file, and is about the wrong half of the year.
+
+`split_tabs` now cuts the workbook into sections first and each tab is chunked
+with its own band. All three tabs of that workbook are in the index, and no
+chunk carries two.
+
+```
+before   chunks 3,4: two tabs at once;  5-9: Spring rows under Fall's calendar
+after    every chunk carries exactly one tab's marker and its own header
+```
+
+**Still imperfect, and worth stating.** Asked when the tail was manufactured —
+a row that exists only in the Spring tab — the answer now comes from the Spring
+tab, which is the fix working. But it said February, and the sheet says
+`R13: Manufacture K=X` against `R3: C=Jan E=Feb I=Mar N=Apr`, which puts K in
+March. The model read the week row correctly (`R2: K=9`, and it said week 9)
+and the month band wrong. That is a reasoning failure over merged headers, not
+a chunking one — the right cells are now in front of it.
 
 ### What this costs
 
@@ -330,3 +373,75 @@ Stages 1 and 2 are the substance — everything else is tidying or tuning. 3 and
 retriever before the pictures follow it would measure the wrong thing: a
 document found by meaning and answered from its text layer is exactly the
 failure this plan exists to remove.
+
+---
+
+## The Gantt chart, and the column that was never a perception problem
+
+Three questions kept coming back wrong in the same shape: right file, right
+tab, right task row, **wrong week by one**.
+
+    Landing Gear - Design     truth: week 9, 16 Mar     model: week 9        ok
+    Tail Design - Manufacture truth: week 9, 16 Mar     model: week 8        off by 1
+    Update Wing Design        truth: week 6, 23 Feb     model: week 5        off by 1
+
+Two things had already been fixed on the way here and both were real. Sheets
+had been refused a rendering entirely — `page_images` returned `[]` for every
+spreadsheet — so the chart reached the answer as text alone; and a workbook was
+being chunked as one grid, which prefixed the Fall tab's header band to Spring
+rows. After both, the model says out loud that it is reading the picture, and
+picks the right row on the right tab. It still lost by one column.
+
+So the next move looked obvious: raise `VISION_SCALE` and let it see the grid
+better. At 2.5 one answer moved from week 8 to week 9 — and the dates went
+wrong in *both directions*, `K=16` read as 23 and `H=23` read as 16. That is
+not a legibility ceiling. That is counting.
+
+**It was never something to see.** The sheet is in the index as text, with the
+band intact:
+
+    R2: B=Week  ... H=6  I=7  J=8  K=9 ...      <- the week
+    R3: C=Jan  E=Feb  I=Mar  N=Apr              <- the month, written once per span
+    R4: B=Task  ... H=23  I=2  J=9  K=16 ...    <- the date
+    R26: B=Landing Gear - Design  K=X
+
+Everything needed to answer is there. `K` is week 9, March, the 16th — three
+lookups and a forward-fill, arithmetic we hold every input for, and we were
+handing it to a model to do by eye across sixteen columns of a JPEG.
+
+`column_context` does it in code instead, and the row now reads:
+
+    R26: B=Landing Gear - Design  K=X [9 | Mar | 16]
+
+All three questions are correct, and `VISION_SCALE` went back to its default —
+the resolution was never the lever.
+
+### What keeps it from firing on a table
+
+The permissive failure is the expensive one: a contact list read as a grid
+would hang three strangers' names off every name in it. Two conditions have to
+hold, and both are about emptiness.
+
+The band must have a **merged row** — a month written once over the fortnight
+it covers. A row addressing spans rather than columns is precisely what makes
+a mark's column something you have to count to; a plain header names each
+column where it sits and needs no resolving.
+
+The body must be **sparse** — a Gantt row is a label and one or two marks in an
+otherwise empty line. A table's rows are full.
+
+Two smaller things came out of the same work. The band's height is measured
+rather than assumed: `HEADER_ROWS` is a window, and a sheet whose band is three
+rows would otherwise pull the first task into it and hang that task's own mark
+on every column. And blank rows are dropped before the band is formed — real
+sheets open with a spacer, it is invisible in the rendered output because empty
+rows are dropped there too, and counted into the band it is a row where every
+column is empty, so every column fails the "the band addresses this" test. That
+one made the resolution work perfectly on a hand-built sheet and do nothing at
+all on the real one.
+
+### What this does not fix
+
+A chart whose meaning is genuinely pictorial — a drawing, a board layout, a
+plot — still has to be seen, and that is what the image path is for. This only
+takes back the part that was arithmetic all along.

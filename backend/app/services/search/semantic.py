@@ -112,6 +112,27 @@ def is_grid(text: str) -> bool:
     return (text or "").lstrip().startswith(GRID_MARKER)
 
 
+def split_tabs(text: str) -> list[str]:
+    """A workbook, split back into one section per tab.
+
+    `sheets.render_tabs` concatenates every tab, each introduced by its own
+    `sheet: 'Name'!range` line. Treating that as one grid is not a small
+    inaccuracy - it takes the FIRST tab's header band and prefixes it to every
+    other tab's rows, so a row from Spring Semester gets resolved against
+    Fall Semester's months and days. Measured: asked about the second tab of
+    the Gantt workbook, five chunks of Spring Semester data carried Fall
+    Semester's calendar, and the answer was confidently about the wrong half
+    of the year.
+    """
+    lines = (text or "").replace(chr(13) + chr(10), chr(10)).strip().split(chr(10))
+    sections: list[list[str]] = []
+    for line in lines:
+        if line.startswith(GRID_MARKER) or not sections:
+            sections.append([])
+        sections[-1].append(line)
+    return [chr(10).join(section) for section in sections if any(part.strip() for part in section)]
+
+
 def chunk_grid(text: str, *, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP) -> list[str]:
     """Cut a rendered spreadsheet, repeating the header band in every piece.
 
@@ -127,16 +148,25 @@ def chunk_grid(text: str, *, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERL
     So the band is repeated. It costs its length in every chunk - a few
     hundred characters - and it is the difference between a row that can be
     read and one that cannot.
+
+    Each **tab** is cut on its own, with its own band. See `split_tabs`.
     """
     cleaned = (text or "").replace(chr(13) + chr(10), chr(10)).strip()
     if not cleaned:
         return []
 
-    lines = cleaned.split(chr(10))
+    chunks: list[str] = []
+    for section in split_tabs(cleaned):
+        chunks.extend(_chunk_one_tab(section, size=size, overlap=overlap))
+    return chunks
+
+
+def _chunk_one_tab(text: str, *, size: int, overlap: int) -> list[str]:
+    lines = text.split(chr(10))
     band = lines[: 1 + sheets.HEADER_ROWS]
     body = lines[1 + sheets.HEADER_ROWS :]
     if not body:
-        return [cleaned]
+        return [text]
 
     prefix = chr(10).join(band)
     # Whatever is left for data after the band is repeated. Guarded so a
@@ -246,9 +276,10 @@ async def index_document(
     replaces rather than accumulates - otherwise a document edited five times
     would answer five different ways at once.
     """
+    grid = is_grid(text)
     if pages:
         numbered: list[tuple[int | None, str]] = chunk_pages(pages)
-    elif is_grid(text):
+    elif grid:
         numbered = [(None, piece) for piece in chunk_grid(text)]
     else:
         numbered = [(None, piece) for piece in chunk(text)]
@@ -278,7 +309,14 @@ async def index_document(
                 embedding=vector,
                 dims=len(vector),
                 model=settings.embeddings_model,
-                meta=meta or {},
+                # Recorded by whoever actually cut the text, not by the
+                # caller. The crawler learns a hit's `snippet_format` from
+                # the *listing*, where a spreadsheet has not been rendered
+                # yet and so reports plain text - and the flag then told the
+                # answer prompt to treat a grid as prose, which excerpts a
+                # window over the middle and cuts off the very header band
+                # the grid chunker had just repeated into every chunk.
+                meta={**(meta or {}), "snippet_format": "grid" if grid else "text"},
             )
         )
     await db.commit()
