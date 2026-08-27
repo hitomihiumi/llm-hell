@@ -70,6 +70,15 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # next.config.ts's rewrites() is resolved at `next build`, not at
+        # container start - this has to reach the builder stage as a build
+        # arg, or the proxy target freezes to next.config.ts's own fallback
+        # instead of this service's network name. Kept equal to the
+        # `environment` value below by hand: one is read at build time by
+        # next.config.ts, the other at request time by the server components
+        # and route handlers that also read BACKEND_URL.
+        BACKEND_URL: http://api:8000
     restart: unless-stopped
     environment:
       # Server-side only. The browser never sees this - it talks to the web
@@ -153,6 +162,42 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:3102:3002"
+
+  # Semantic retrieval, which this stack had none of. Every source searches
+  # lexically, which is why `search_terms` exists to strip a question down to
+  # the few words a keyword index might match, and why the planner rewrites
+  # questions into corpus vocabulary. Both are compensations for the same
+  # missing capability.
+  #
+  # multilingual-e5-small, deliberately: the questions are Ukrainian and the
+  # documents are mostly English, and a monolingual model would need the
+  # planner to bridge that exactly as it does today. 384 dimensions, CPU, and
+  # small enough that the whole corpus indexes in seconds.
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    restart: unless-stopped
+    command: ["--model-id", "intfloat/multilingual-e5-small", "--port", "8080"]
+    environment:
+      # Explicit, and not optional. Without it this image's hub client builds
+      # a relative URL and every start dies on
+      #   Error: Could not download model artifacts
+      #   Caused by: relative URL without a base
+      # which reads like a broken model id rather than a missing base URL.
+      HF_ENDPOINT: https://huggingface.co
+      # e5 models are trained with "query:" / "passage:" prefixes; the caller
+      # adds them, so nothing here needs to know which side it is serving.
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    volumes:
+      # The model is ~120MB and is fetched on first start. Cached so a
+      # restart is not another download.
+      - embeddings-cache:/data
+    ports:
+      - "127.0.0.1:8081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   google-mcp:
     build:
@@ -257,6 +302,7 @@ services:
       - "127.0.0.1:8001:8000"
 
 volumes:
+  embeddings-cache:
   pg_data:
   prom_data:
   grafana_data:

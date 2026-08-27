@@ -27,6 +27,7 @@ from app.models.source import (
     SOURCE_POSTGRES_KB,
     Source,
 )
+from app.services.mcp.semantic import SOURCE_SEMANTIC
 
 logger = logging.getLogger("llmhell.seed")
 settings = get_settings()
@@ -41,6 +42,11 @@ _DEFAULT_SOURCES: dict[str, tuple[str, str, float, str | None]] = {
     SOURCE_GOOGLE_MAIL: ("google_workspace", "Gmail", 0.8, "google_client_secret"),
     SOURCE_GITLAB: ("gitlab", "GitLab", 1.0, "gitlab_personal_access_token"),
     SOURCE_POSTGRES_KB: ("postgres", "Knowledge base (Postgres)", 1.0, "kb_database_uri"),
+    # The index this deployment builds itself, searched by meaning rather than
+    # by spelling. Weight 1.0 to start: it has no track record here yet, and
+    # weighting it up before measuring would be exactly the guess the eval set
+    # exists to replace.
+    SOURCE_SEMANTIC: ("semantic", "Semantic index", 1.0, None),
 }
 
 
@@ -67,6 +73,10 @@ def _is_configured(key: str) -> bool:
         return bool(settings.gitlab_personal_access_token)
     if key == SOURCE_POSTGRES_KB:
         return bool(settings.kb_search_tables)
+    if key == SOURCE_SEMANTIC:
+        # Enabled only once a corpus has been indexed. An empty index answers
+        # every search with nothing, which looks exactly like a broken source.
+        return settings.semantic_enabled
     return True
 
 

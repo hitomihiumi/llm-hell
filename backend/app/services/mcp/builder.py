@@ -17,6 +17,7 @@ from app.services.mcp.connector import Connector
 from app.services.mcp.gitlab import GitLabConnector
 from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.postgres import PostgresKbConnector
+from app.services.mcp.semantic import SemanticConnector
 
 
 def build_connectors(settings: Settings) -> list[Connector]:
@@ -37,4 +38,10 @@ def build_connectors(settings: Settings) -> list[Connector]:
         PostgresKbConnector(None, settings, key=SOURCE_POSTGRES_KB),
         GoogleWorkspaceConnector(None, settings, key=SOURCE_GOOGLE_DRIVE),
         GoogleWorkspaceConnector(None, settings, key=SOURCE_GOOGLE_MAIL),
+        # The semantic index. No MCP server behind it - it reads the chunks
+        # this deployment indexed itself - but it is a connector so that it
+        # goes through the same fusion, the same per-source cap and the same
+        # status reporting as everything else, rather than being spliced in
+        # ahead of them on a rule written for the occasion.
+        SemanticConnector(settings),
     ]

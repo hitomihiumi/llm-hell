@@ -206,3 +206,113 @@ def test_per_source_cap_counts_documents_not_phrasings():
 
     assert sum(1 for h in ranked if h.source == "chatty") == 3
     assert any(h.source == "quiet" for h in ranked)
+
+
+
+# --- one hit is not one document --------------------------------------------
+
+
+def hit_in(source: str, n: int, *, external_id: str) -> SearchHit:
+    return SearchHit(
+        id=f"{source}:{n}", source=source, title=f"{source} {n}", external_id=external_id
+    )
+
+
+def test_many_matches_in_one_file_are_one_document():
+    """GitLab returns a hit per matching line. Measured: asked the dimensions
+    of a motor, GitLab's entire contribution was `pnpm-lock.yaml` ten times
+    over, which at a per-source cap of ten took half the result list."""
+    lockfile = [hit_in("gitlab", n, external_id="3:pnpm-lock.yaml") for n in range(10)]
+
+    ranked = fuse({"gitlab": [lockfile]}, k=60)
+
+    assert len(ranked) == 1
+
+
+def test_a_repeated_file_does_not_outscore_one_found_once():
+    """Otherwise matching a term ten times in a lockfile beats matching it
+    once in the document that answers the question."""
+    lockfile = [hit_in("a", n, external_id="3:lock") for n in range(9)]
+    answer = hit_in("a", 99, external_id="3:answer")
+
+    ranked = fuse({"a": [[*lockfile, answer]]}, k=60)
+
+    assert len(ranked) == 2
+    # The lockfile still wins on position - it was first - but by one rank,
+    # not by having been counted nine times.
+    assert ranked[0].external_id == "3:lock"
+    assert ranked[1].score > 0
+
+
+def test_the_surviving_hit_is_the_best_placed_one():
+    """A file's best match is the one worth showing and linking to."""
+    hits = [hit_in("a", 5, external_id="3:f"), hit_in("a", 0, external_id="3:f")]
+
+    ranked = fuse({"a": [hits]}, k=60)
+
+    assert ranked[0].id == "a:5"
+
+
+def test_two_files_stay_two_documents():
+    hits = [hit_in("a", 0, external_id="3:one"), hit_in("a", 1, external_id="3:two")]
+
+    assert len(fuse({"a": [hits]}, k=60)) == 2
+
+
+def test_sources_without_an_external_id_are_unaffected():
+    """Falling back to the hit id keeps them behaving exactly as before."""
+    assert len(fuse({"a": [[hit("a", i) for i in range(4)]]}, k=60)) == 4
+
+
+def test_the_same_file_across_phrasings_still_gains_from_agreement():
+    """Deduplicating within a phrasing must not flatten agreement between
+    them - that is the signal the whole sum exists to capture."""
+    once = fuse({"a": [[hit_in("a", 0, external_id="3:f")]]}, k=60)[0].score
+    twice = fuse(
+        {"a": [[hit_in("a", 0, external_id="3:f")], [hit_in("a", 0, external_id="3:f")]]}, k=60
+    )[0].score
+
+    assert twice > once
+
+
+# --- pages survive the merge ------------------------------------------------
+
+
+def paged(source: str, n: int, *, external_id: str, pages: list[int] | None) -> SearchHit:
+    return SearchHit(
+        id=f"{source}:{n}",
+        source=source,
+        title=f"{source} {n}",
+        external_id=external_id,
+        matched_pages=pages,
+    )
+
+
+def test_matched_pages_survive_when_a_lexical_hit_wins_on_rank():
+    """The retriever that knows which page matched is usually not the one that
+    ranks best. Measured live: the semantic index found page 2 of a datasheet,
+    the lexical hit for the same file ranked above it, and the merged hit came
+    out with no pages at all - so the answer was given whichever pages merely
+    looked interesting, and said the board had no gyroscope."""
+    lexical = paged("google_drive", 0, external_id="doc", pages=None)
+    semantic = paged("google_drive", 1, external_id="doc", pages=[2, 5])
+
+    ranked = fuse({"google_drive": [[lexical]], "semantic": [[semantic]]}, k=60)
+
+    assert len(ranked) == 1
+    assert ranked[0].matched_pages == [2, 5]
+
+
+def test_pages_from_several_retrievers_are_combined_in_order():
+    first = paged("s", 0, external_id="doc", pages=[3])
+    second = paged("s", 1, external_id="doc", pages=[7, 3])
+
+    ranked = fuse({"a": [[first]], "b": [[second]]}, k=60)
+
+    assert ranked[0].matched_pages == [3, 7]
+
+
+def test_a_document_nobody_paged_keeps_no_pages():
+    ranked = fuse({"a": [[paged("a", 0, external_id="doc", pages=None)]]}, k=60)
+
+    assert ranked[0].matched_pages is None

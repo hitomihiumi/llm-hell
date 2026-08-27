@@ -10,13 +10,21 @@ more than one of them:
 | role | what it does | why it is separate |
 | --- | --- | --- |
 | **answer** | reads the fused search results and writes the cited answer | reasons; sees the question |
-| **vision** | turns a PDF page image into text | transcribes; never sees the question |
+| **vision** | reads a PDF page image — *this is the answer model*, not a separate one | sees the page and the question together |
 | **agent** | drives `@coder`: emits tool calls, reads their results, loops | acts; needs native tool calling |
 
-They may be one endpoint or three. `ANSWER_MODEL_ID`, `VISION_MODEL_ID` and
-`AGENT_MODEL_ID` are matched against the `model_id` of any **enabled**
-endpoint, so pointing two of them at the same multimodal model needs one row
-and no special case.
+They may be one endpoint or two. `ANSWER_MODEL_ID` and `AGENT_MODEL_ID` are
+matched against the `model_id` of any **enabled** endpoint.
+
+**There is no `VISION_MODEL_ID`, deliberately.** The model that writes the
+answer is the model that sees the page: a separate vision model can only hand
+over a *description* of a diagram, and an answer written from a description is
+the failure the whole path exists to remove — ask which side of the MCU the USB
+port is on, and a transcription that did not happen to mention it becomes "the
+documents contain no information about that" while the board sits legible in
+the file. If your answer model is text-only, turn pictures off with
+`ANSWER_IMAGE_HITS=0` and `VISION_MAX_PAGES=0` rather than pointing a second
+model at them.
 
 The agent is the one role that will not share. It has to emit structured
 `tool_calls`, which is a capability rather than a preference — a model without
@@ -74,10 +82,10 @@ non-multimodal answer model needs.
 
 ### The transcription path is still there, and is now optional
 
-`VISION_MODEL_ID` drives a separate pass that describes pages and stores the
-result in `document_pages`. That is **not** needed for answering any more — it
-exists for **retrieval**, because Drive indexes a PDF's text layer and cannot
-find a term printed only inside a diagram. Leave it empty and answers still
+`VISION_MAX_PAGES` drives a separate pass that describes pages and stores the
+result in `document_pages`. That is **not** needed for answering — it exists
+for **retrieval**, because Drive indexes a PDF's text layer and cannot find a
+term printed only inside a diagram. Set it to 0 and answers still
 see the pictures; set it and diagram terms also become searchable.
 
 ---
@@ -92,8 +100,10 @@ docker compose exec api python manage.py add-endpoint   --name "Gemma 4 31B (Ope
 
 ```
 ANSWER_MODEL_ID=google/gemma-4-31b-it
-VISION_MODEL_ID=google/gemma-4-31b-it
 ```
+
+One multimodal model, one endpoint row. It answers, and it looks at the pages
+while doing so.
 
 Measured against the two-model setup on the same datasheet and the same
 questions:
@@ -136,10 +146,12 @@ docker compose exec api python manage.py add-endpoint \
 Then in `.env`:
 
 ```
-ANSWER_MODEL_ID=deepseek/deepseek-v4-flash-0731
-VISION_MODEL_ID=qwen/qwen3-vl-8b-instruct
+ANSWER_MODEL_ID=qwen/qwen3-vl-8b-instruct
 VISION_CONCURRENCY=4
 ```
+
+The answer model must be the multimodal one - a text-only answer model with a
+vision model beside it is exactly the split this setup no longer has.
 
 and restart the API. The two ids must match the `model_id` of an **enabled**
 endpoint exactly; a mismatch is logged and the answer falls back to the first
@@ -237,8 +249,8 @@ rejects the fields outright costs the optimisation and not the call.
 for a single-GPU local server: Ollama answered one of four parallel requests
 and failed the other three as transport errors, and because a failed page is
 treated as a missing illustration rather than an error, the document was
-quietly indexed with one page of four. If you ever point `VISION_MODEL_ID` at
-something local, set this to 1.
+quietly indexed with one page of four. If your answer model runs locally, set
+this to 1.
 
 **Keys never leave the server.** Endpoints have no API schema and are managed
 only through `manage.py`, so an upstream key is not exposed by any route.

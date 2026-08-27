@@ -1,0 +1,297 @@
+{
+  "summary": {
+    "label": "all sources, narrow ones weighted 0.6",
+    "enabled_sources": [
+      "gitlab",
+      "google_drive",
+      "google_mail",
+      "postgres_kb"
+    ],
+    "cases": 27,
+    "skipped_unreachable": 0,
+    "mrr": 0.803,
+    "recall": {
+      "@1": 0.704,
+      "@3": 0.852,
+      "@5": 0.889,
+      "@10": 1.0
+    },
+    "found_all_expected": 27,
+    "found_nothing": 0,
+    "median_best_rank": 1,
+    "noise": 0.854,
+    "seconds": 415.7
+  },
+  "cases": [
+    {
+      "query": "according to the gannt chart when was the team object 3d printed - answer in ukrainian",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 2,
+      "rr": 0.5,
+      "returned": 17,
+      "useful": 1
+    },
+    {
+      "query": "Коли ми завершили проектування шасі?",
+      "reachable": true,
+      "found": 2,
+      "of": 2,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 14,
+      "useful": 2
+    },
+    {
+      "query": "Які розміри t motor u7?",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 10,
+      "useful": 1
+    },
+    {
+      "query": "З якого боку від MCU розташований USB-порт на платі F722?",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 7,
+      "useful": 1
+    },
+    {
+      "query": "answer in ukrainian - when was the team object 3d print completed?",
+      "reachable": true,
+      "found": 2,
+      "of": 2,
+      "best_rank": 2,
+      "rr": 0.5,
+      "returned": 17,
+      "useful": 2
+    },
+    {
+      "query": "reciprocal rank fusion",
+      "reachable": true,
+      "found": 2,
+      "of": 2,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 17,
+      "useful": 2
+    },
+    {
+      "query": "Що таке auth-service",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 6,
+      "useful": 1
+    },
+    {
+      "query": "Якими міркуваннями ми керувалися вибираючи саме конфігураіцію дрону з поворотними двигунами а не якусь іншу?",
+      "reachable": true,
+      "found": 3,
+      "of": 3,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 10,
+      "useful": 3
+    },
+    {
+      "query": "How do I rotate a leaked GitLab token?",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 4,
+      "rr": 0.25,
+      "returned": 8,
+      "useful": 1
+    },
+    {
+      "query": "Why must the KV cache be fp8?",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 7,
+      "rr": 0.14285714285714285,
+      "returned": 16,
+      "useful": 1
+    },
+    {
+      "query": "auth-service README NestJS Prisma backend frontend",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 3,
+      "useful": 1
+    },
+    {
+      "query": "in the F722-HD controller on what side is usb port relative to mcu?",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 8,
+      "useful": 1
+    },
+    {
+      "query": "what is in the auth-service readme",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 1,
+      "useful": 1
+    },
+    {
+      "query": "Занйди на gitlab репозиторій з назвою auth-service та перескажи мені зміст readme",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 2,
+      "useful": 2
+    },
+    {
+      "query": "Коли закінчилось проектування шасі?",
+      "reachable": true,
+      "found": 2,
+      "of": 2,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 14,
+      "useful": 2
+    },
+    {
+      "query": "Скільки польских пропелерів ми замовили та яка їх вартість?",
+      "reachable": true,
+      "found": 2,
+      "of": 2,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 10,
+      "useful": 2
+    },
+    {
+      "query": "Що собою являє документ da67b1fab1fc4716e2d81cfa00030e6494ff93ca14158f5e7733226ab928b6df_optim",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 3,
+      "useful": 1
+    },
+    {
+      "query": "Як мені треба розпаювати мультироторну збірку на контроллері F722-HD?",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 5,
+      "useful": 1
+    },
+    {
+      "query": "пошукай дату у діограмі гранта",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 6,
+      "rr": 0.16666666666666666,
+      "returned": 6,
+      "useful": 1
+    },
+    {
+      "query": "чи присутній гіроскоп на пдаті F722",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 2,
+      "useful": 1
+    },
+    {
+      "query": "яку конфігурацію дрону було вибрано?",
+      "reachable": true,
+      "found": 3,
+      "of": 3,
+      "best_rank": 2,
+      "rr": 0.5,
+      "returned": 19,
+      "useful": 3
+    },
+    {
+      "query": "які результати проєктування дрона vertical flight society",
+      "reachable": true,
+      "found": 2,
+      "of": 2,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 20,
+      "useful": 2
+    },
+    {
+      "query": "які розміри у t motor u7?",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 10,
+      "useful": 1
+    },
+    {
+      "query": "what does the Gmail team say about the inbox",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 8,
+      "rr": 0.125,
+      "returned": 10,
+      "useful": 1
+    },
+    {
+      "query": "Роскажи які пісьма в мене лежать в поштовій скрині",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 16,
+      "useful": 1
+    },
+    {
+      "query": "а які листи мені відправляла команда gmail?",
+      "reachable": true,
+      "found": 2,
+      "of": 2,
+      "best_rank": 2,
+      "rr": 0.5,
+      "returned": 4,
+      "useful": 2
+    },
+    {
+      "query": "Передивись зміст gmail, та скажи які в мене останні пісьма",
+      "reachable": true,
+      "found": 1,
+      "of": 1,
+      "best_rank": 1,
+      "rr": 1.0,
+      "returned": 13,
+      "useful": 1
+    }
+  ]
+}

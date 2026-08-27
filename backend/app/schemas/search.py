@@ -65,6 +65,14 @@ class SearchHit(BaseModel):
     # that quietly showed something else would be worse than none.
     preview_pages: int | None = None
 
+    # The pages retrieval actually matched, best first, when the retriever
+    # knows. Set by the semantic index, whose chunks record their page;
+    # absent for every lexical hit, which matches a document and not a place
+    # in it. The answer stage renders these instead of guessing which pages
+    # look interesting - the difference between attaching a picture and
+    # attaching *the* picture.
+    matched_pages: list[int] | None = None
+
     # "grid" when the snippet is a rendered spreadsheet rather than prose.
     # Two things downstream need to know. The answer prompt gives a grid a
     # larger character budget, because trimming it costs whole rows and the

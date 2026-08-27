@@ -20,14 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.models.endpoint import ModelEndpoint
-from app.models.source import SOURCE_GOOGLE_DRIVE
 from app.models.user import User
 from app.schemas.search import ChatTurn, SearchHit
 from app.services.llm import chat as llm_chat
 from app.services.mcp.connector import SearchContext
-from app.services.mcp.google import GoogleWorkspaceConnector
 from app.services.mcp.registry import McpRegistry
 from app.services.search import answer as answer_service
+from app.services.search import images as image_service
 from app.services.search import planner
 from app.services.search.service import federated_search
 
@@ -166,28 +165,19 @@ async def _select_agent_endpoint(db: AsyncSession, settings: Settings) -> ModelE
 async def _page_images(
     hits: list[SearchHit], registry: McpRegistry, settings: Settings
 ) -> dict[str, list[bytes]]:
-    """Same logic as the web search endpoint: attach preview images for hits."""
-    if not settings.answer_image_hits:
-        return {}
+    """Page pictures for the hits about to be answered from.
 
-    connector = registry.get(SOURCE_GOOGLE_DRIVE)
-    if not isinstance(connector, GoogleWorkspaceConnector):
-        return {}
-
-    images: dict[str, list[bytes]] = {}
-    for hit in hits:
-        if len(images) >= settings.answer_image_hits:
-            break
-        if hit.source != SOURCE_GOOGLE_DRIVE:
-            continue
-        try:
-            pages = await connector.page_images(hit.id)
-        except Exception as exc:  # noqa: BLE001 - pictures are a bonus
-            logger.warning("could not render pages of %s: %s", hit.id, exc)
-            continue
-        if pages:
-            images[hit.id] = pages
-    return images
+    A thin adapter over `search.images.page_images`: this half knows how to
+    find a connector, that half knows how to spend the budget. Both routes
+    that answer from search results use the same allocation, so a change to
+    how pages are chosen cannot apply to one and not the other.
+    """
+    return await image_service.page_images(
+        hits,
+        renderer_for=lambda source: getattr(registry.get(source), "page_images", None),
+        answer_image_hits=settings.answer_image_hits,
+        vision_max_pages=settings.vision_max_pages,
+    )
 
 
 def _openai_chunk(chunk_id: str, model: str, delta: dict[str, Any], finish_reason: str | None = None) -> bytes:

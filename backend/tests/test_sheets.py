@@ -47,7 +47,10 @@ def test_a_cell_carries_its_column():
     in the header row rather than counted to."""
     rendered = sheets.render(REPORT)
 
-    assert "R31: B=3D print parts for the Team Object  G=X  H=O" in rendered
+    # The marks now carry what their column means as well - see the
+    # resolution tests below - but the addressing is the property here.
+    assert "R31: B=3D print parts for the Team Object  G=X [3 | Sep | 18]" in rendered
+    assert "H=O [3 | Sep | 19]" in rendered
     assert "R4: B=Task  C=1  D=8  E=12  F=15  G=18  H=19" in rendered
 
 
@@ -230,3 +233,106 @@ def test_rendering_every_tab_keeps_them_apart():
     whole = sheets.render_tabs([REPORT, SPRING])
 
     assert whole.count("sheet: ") == 2
+
+
+# --- resolving a column against the header band -------------------------------
+#
+# A Gantt cell says `X`. Which week that is lives at the top of the sheet, in a
+# band whose merged cells make the answer a matter of counting columns - which
+# is exactly what kept going wrong: right task, right tab, wrong week by one.
+# It is arithmetic, and these pin it down.
+
+
+def gantt(*extra_rows: str) -> str:
+    """A Spring-Semester-shaped sheet: weeks, merged months, dates, then tasks."""
+    weeks = " | ".join(["", "Week"] + [str(n) for n in range(1, 16)])
+    months = " | ".join(["", "", "Jan", "", "Feb", "", "", "", "Mar", "", "", "", "", "Apr"])
+    dates = " | ".join(["", "Task", "19", "26", "2", "9", "16", "23", "2", "9", "16", "23", "30", "6", "13"])
+    head = ["## 'Spring Semester'!A1:Z1000", "R2: " + weeks, "R3: " + months, "R4: " + dates]
+    return chr(10).join(head + list(extra_rows))
+
+
+def test_a_mark_carries_the_week_month_and_date_of_its_column():
+    """The whole point: `H` is week 6, February, the 23rd, and nobody has to
+    count to find that out."""
+    rendered = sheets.render(gantt("R6: | Update Wing Design | | | | | | X"))
+    assert "H=X [6 | Feb | 23]" in rendered
+
+
+def test_a_merged_month_reaches_the_columns_it_covers():
+    """February is written once, over the fortnight it spans. A column that
+    carries no month of its own still falls in one."""
+    rendered = sheets.render(gantt("R9: | Optimize Manufacturing | | | | | | | | | X"))
+    # K is four columns past the last written month, and the month is March.
+    assert "K=X [9 | Mar | 16]" in rendered
+
+
+def test_the_row_label_is_left_bare():
+    """`B` is what the columns are being read against. Annotating it with the
+    band's own first column says nothing and reads as noise."""
+    rendered = sheets.render(gantt("R6: | Update Wing Design | | | | | | X"))
+    assert "B=Update Wing Design  H=" in rendered
+
+
+def test_the_band_rows_are_not_annotated_with_themselves():
+    """`C=Jan [1 | Jan | 19]` reads as a fourth header row."""
+    rendered = sheets.render(gantt("R6: | Wings | | | | | | X"))
+    assert "R3: C=Jan  E=Feb" in rendered
+
+
+def test_a_task_row_is_never_taken_for_a_header_row():
+    """`HEADER_ROWS` is a window, not a measurement. A sheet whose band is
+    three rows would otherwise pull the first task in - and hang that task's
+    own mark on every column as though it meant something."""
+    rendered = sheets.render(gantt("R6: | Update Wing Design | | | | | | X"))
+    assert "| X]" not in rendered
+
+
+def test_a_plain_table_is_left_alone():
+    """The permissive failure is the one that costs. A contact list read as a
+    grid would hang three strangers' names off every name in it."""
+    rows = [
+        ["Name", "Email", "Team", "City"],
+        ["Bob", "b@example.com", "Air", "Kyiv"],
+        ["Cara", "c@example.com", "Fuel", "Lviv"],
+        ["Dan", "d@example.com", "Air", "Odesa"],
+        ["Eve", "e@example.com", "Fuel", "Kyiv"],
+    ]
+    report = chr(10).join(
+        ["## 'People'!A1:D100"] + [f"R{number}: " + " | ".join(cells) for number, cells in enumerate(rows, start=1)]
+    )
+    assert "[" not in sheets.render(report)
+
+
+def test_a_sheet_with_no_merged_row_is_left_alone():
+    """Merging is the signal. Without it, no column needs resolving - every
+    header names exactly the column it sits in."""
+    rows = [
+        ["", "Task", "Mon", "Tue", "Wed", "Thu", "Fri"],
+        ["", "Standup", "", "", "X", "", ""],
+        ["", "Review", "", "", "", "", "X"],
+    ]
+    report = chr(10).join(
+        ["## 'Week'!A1:G100"] + [f"R{number}: " + " | ".join(cells) for number, cells in enumerate(rows, start=1)]
+    )
+    assert "[" not in sheets.render(report)
+
+
+def test_an_excerpt_carries_the_resolution_too():
+    """A trimmed sheet is where this matters most - the band may not have
+    survived the budget, and a bare `K=X` with no band above it is unreadable."""
+    body = [f"R{n}: | Task {n} | | | | | | | | | X" for n in range(6, 60)]
+    trimmed = sheets.excerpt(gantt(*body), "Task 40", 900)
+    assert "K=X [9 | Mar | 16]" in trimmed
+
+
+def test_a_blank_row_above_the_header_does_not_disable_resolution():
+    """Real sheets start with one - a spacer, or a frozen row left empty - and
+    it is invisible in the output because blank rows are dropped there too.
+    Counted into the band, it is a row where every column is empty, so every
+    column fails "the band addresses this" and nothing resolves. Which is what
+    happened: this worked on a hand-built sheet and did nothing on the real one.
+    """
+    blank = chr(10).join(["## 'Spring Semester'!A1:Z1000", "R1: | | |"])
+    rendered = sheets.render(blank + chr(10) + gantt("R6: | Update Wing Design | | | | | | X").split(chr(10), 1)[1])
+    assert "H=X [6 | Feb | 23]" in rendered

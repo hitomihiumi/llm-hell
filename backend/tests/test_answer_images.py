@@ -55,20 +55,37 @@ def test_pages_are_attached_to_the_same_turn_as_the_results():
     assert included == [HIT]
 
 
-def test_each_picture_is_announced_by_the_number_that_cites_it():
-    """`[2]` has to mean the same thing whether the model took it from a
-    snippet or from a page, or a citation stops being checkable."""
+def test_each_picture_names_the_result_it_belongs_to():
+    """A picture has to be attributable to the result that cites it, or a
+    citation stops being checkable."""
     messages, _ = build_prompt(
         "q", [OTHER, HIT], ENDPOINT, settings=SETTINGS, images={HIT.id: [PAGE, PAGE]}
     )
     labels = [
         part["text"]
         for part in user_message(messages)["content"]
-        if part["type"] == "text" and part["text"].startswith("[")
+        if part["type"] == "text" and part["text"].startswith("Result ")
     ]
 
-    # The PDF is the second hit, so its pages are announced as [2].
-    assert labels == ["[2] page image 1:", "[2] page image 2:"]
+    # The PDF is the second hit, so its pages belong to result 2.
+    assert labels == ["Result 2, page image 1:", "Result 2, page image 2:"]
+
+
+def test_a_picture_label_is_not_written_as_a_citation():
+    """It used to be `[2] page image 1:`, and the model copied the label into
+    its answer - "[1 (page image 2)]" - which `extract_citations` does not
+    match, so a correct answer came back with zero citations."""
+    messages, _ = build_prompt(
+        "q", [HIT], ENDPOINT, settings=SETTINGS, images={HIT.id: [PAGE]}
+    )
+    labels = [
+        part["text"]
+        for part in user_message(messages)["content"]
+        if part["type"] == "text" and "page image" in part["text"]
+    ]
+
+    assert labels
+    assert not any(label.lstrip().startswith("[") for label in labels)
 
 
 def test_images_for_a_hit_that_did_not_fit_are_not_attached():

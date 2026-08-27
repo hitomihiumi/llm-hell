@@ -99,6 +99,39 @@ class Settings(BaseSettings):
     # Merged last, so it can override any default the body builder sets.
     agent_extra_body: dict[str, Any] = {}
 
+    # --- Semantic index ----------------------------------------------------
+    # Text Embeddings Inference, in its own container. OpenAI-compatible, so
+    # any other endpoint serving /v1/embeddings works by changing the URL.
+    embeddings_url: str = "http://embeddings:8080"
+    # Multilingual on purpose: the questions are Ukrainian, the documents
+    # mostly English, and a monolingual model would leave the query planner
+    # bridging that exactly as it does today.
+    embeddings_model: str = "intfloat/multilingual-e5-small"
+    embeddings_timeout_seconds: float = 60.0
+    # Cosine below this is not worth returning. Measured on this corpus, e5
+    # puts everything between 0.69 and 0.86: a correct answer scored as low as
+    # 0.7593 while an unrelated lockfile reached 0.7749, so an absolute
+    # threshold cannot separate them and a high one is actively harmful - 0.80
+    # would have rejected three of five correct answers.
+    #
+    # It is set low on purpose. What orders these results is their *position*,
+    # which is what RRF consumes; this only keeps obvious rubbish out of the
+    # list rather than pretending the score means more than it does.
+    semantic_min_score: float = 0.72
+    # Off until a corpus has been indexed: an enabled source with an empty
+    # index reports "0 hits" on every search and looks broken.
+    semantic_enabled: bool = False
+    # How often the API re-crawls the sources to refresh the index. 0 turns
+    # the automatic refresh off and leaves `manage.py index-corpus` as the
+    # only way to fill it.
+    #
+    # Cheap to run often because the crawl is incremental: a document whose
+    # content has not changed is skipped without being embedded, so a pass
+    # over an unchanged corpus costs one listing call per source. An index
+    # nobody refreshes is worse than no index - it answers confidently from a
+    # corpus that has moved on, and says nothing about being stale.
+    semantic_index_interval_minutes: int = 30
+
     # --- Search federation ------------------------------------------------
     # Wall clock for one source's entire search(), which may span several
     # tool calls.
@@ -180,7 +213,6 @@ class Settings(BaseSettings):
     # A second endpoint that reads page images. Empty means the feature is
     # off, and a PDF then contributes only its text layer - which is the
     # correct degraded behaviour, not a failure.
-    vision_model_id: str = ""
     # How many pages of one document may be shown to it. This is the cap that
     # keeps a 200-page manual from becoming 200 GPU calls; the pages are
     # chosen by how much of them is picture rather than text.

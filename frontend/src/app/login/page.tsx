@@ -34,7 +34,7 @@ function LoginForm() {
       await api.post<User>("/api/auth/login", { username, password });
       // Not a client navigation: the session cookie was just set, and the app
       // shell is rendered on the server from that cookie.
-      window.location.href = searchParams.get("next") ?? "/search";
+      window.location.href = searchParams.get("next") ?? "/chat";
     } catch (caught) {
       setError(
         caught instanceof ApiError && caught.status === 401

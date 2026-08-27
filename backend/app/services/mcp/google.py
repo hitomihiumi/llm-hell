@@ -77,8 +77,9 @@ from app.services.mcp.transport import (
     list_tool_names,
     summarise_exception,
 )
-from app.services.pdf import page_stats, render_pages, select_visual_pages
+from app.services.pdf import page_stats, page_texts, render_pages, select_visual_pages
 from app.services.search import page_index
+from app.services.search import semantic as semantic_index
 
 logger = logging.getLogger("llmhell.mcp.google")
 
@@ -315,11 +316,11 @@ def _workspace_text_mime_type(type_hint: str | None) -> str | None:
 def is_previewable_drive_file(type_hint: str | None) -> bool:
     # Spreadsheets are read through the Sheets API; PDF export of a large
     # sheet reliably hits exportSizeLimitExceeded and gives no useful preview.
-    return (
-        is_pdf(type_hint)
-        or is_image(type_hint)
-        or (is_google_workspace_editor(type_hint) and not is_google_spreadsheet(type_hint))
-    )
+    # Spreadsheets included: a Gantt chart is read far more reliably as a
+    # picture than as a grid addressed by column letter. Whether the export
+    # actually succeeds is decided per file by its size, in
+    # `_should_attempt_pdf_export`.
+    return is_pdf(type_hint) or is_image(type_hint) or is_google_workspace_editor(type_hint)
 
 
 def _image_as_jpeg(data: bytes, quality: int = 85) -> bytes | None:
@@ -1131,6 +1132,30 @@ class GoogleWorkspaceConnector:
             if not hit.external_id or hit.snippet:
                 continue
 
+            # The semantic index already downloaded and parsed this document
+            # when it crawled the corpus, so fetching it again is paying twice
+            # for the same bytes - and it is the expensive half of a search:
+            # measured, Drive took 11 seconds against the semantic index's
+            # 0.66 over the same documents, almost all of it here.
+            #
+            # A miss is normal and costs nothing: the document is simply not
+            # indexed yet, and it is fetched exactly as before.
+            if ctx is not None and self._settings.semantic_enabled:
+                try:
+                    cached = await semantic_index.stored_text(
+                        ctx.db,
+                        source_key=self.key,
+                        external_id=hit.external_id,
+                        model=self._settings.embeddings_model,
+                    )
+                except Exception as exc:  # noqa: BLE001 - a cache miss, not a failure
+                    logger.info("semantic cache lookup failed for %s: %s", hit.external_id, exc)
+                    cached = None
+                if cached:
+                    hit.snippet = excerpt_around(cached, query, self._settings.answer_snippet_chars)
+                    enriched += 1
+                    continue
+
             # A PDF is neither a Doc nor a message: Drive refuses to export it
             # ("Export only supports Docs Editors files") and refuses to render
             # it ("not a viewable image type"), so the only way to its content
@@ -1293,22 +1318,73 @@ class GoogleWorkspaceConnector:
             added += 1
         return added
 
-    async def page_images(self, hit_id: str, *, max_pages: int | None = None) -> list[bytes]:
+    async def page_texts(self, hit_id: str) -> list[str] | None:
+        """The document's text layer, page by page, or None if it has no pages.
+
+        The crawler uses this to index a paginated document *per page*, so
+        every chunk records the page it came from and the answer stage can
+        later attach that page's picture. Without it a chunk knows only which
+        document it belongs to, and "which side of the MCU is the USB port on"
+        can be retrieved correctly and still answered from the wrong page.
+
+        None rather than an empty list for a file that simply has no pages -
+        a spreadsheet, a source file - because those are not failures and the
+        caller falls back to whole-document chunking.
+        """
+        prefix, _, file_id = hit_id.partition(":")
+        if prefix != self.key or not file_id:
+            return None
+
+        type_hint = await self._type_of(file_id)
+        if is_google_spreadsheet(type_hint):
+            return None
+        if not (is_pdf(type_hint) or is_google_workspace_editor(type_hint)):
+            return None
+
+        data = await self._fetch_file_bytes(file_id, type_hint)
+        if data is None:
+            return None
+        texts = page_texts(data)
+        return texts or None
+
+    async def page_images(
+        self, hit_id: str, *, max_pages: int | None = None, pages: list[int] | None = None
+    ) -> list[bytes]:
         """Pictures for the answer model to look at.
 
-        For PDFs and exported Google Workspace files this renders the most
-        visual pages. For raster images it downloads and converts the file
-        itself, so the model sees the picture rather than just its filename.
+        `pages` names the pages retrieval actually matched, and when it is
+        given those are the pages rendered. That is the whole difference
+        between attaching a picture and attaching *the* picture: without it
+        the choice falls to `select_visual_pages`, which ranks pages by how
+        much of them is image and never sees the question. On a four-page
+        datasheet that is fine; on a forty-page one the answer is on the page
+        that matched and the prompt gets the pages with the most ink.
+
+        The visual ranking stays as the fallback, for a hit whose retriever
+        knows nothing about pages - which is every lexical hit.
+
+        For raster images this downloads and converts the file itself, so the
+        model sees the picture rather than just its filename.
         """
         prefix, _, file_id = hit_id.partition(":")
         if prefix != self.key or not file_id:
             return []
 
         type_hint = await self._type_of(file_id)
-        # Spreadsheets are read through the Sheets API instead; exporting a
-        # large sheet to PDF hits Drive's exportSizeLimitExceeded and produces
-        # noisy logs without giving the model usable content.
-        if is_google_spreadsheet(type_hint):
+        # A spreadsheet is rendered too, and that is a change of mind worth
+        # recording. It used to be refused outright, on the grounds that a
+        # large sheet hits Drive's exportSizeLimitExceeded and produces noise
+        # instead of a preview - true, and the size guard below is what that
+        # reasoning actually justified.
+        #
+        # What it cost was the harder half of every Gantt question. A chart
+        # like that is visual data: an X sits physically under its month.
+        # Reading it from the text rendering means resolving a column letter
+        # across two merged header rows by arithmetic, and the model gets that
+        # wrong - measured, three questions in a row came back with the wrong
+        # month while the right cells were in front of it. Rendered as a page,
+        # the same question is looking at where the mark is.
+        if is_google_spreadsheet(type_hint) and not self._should_attempt_pdf_export(file_id):
             return []
 
         data = await self._fetch_file_bytes(file_id, type_hint)
@@ -1316,7 +1392,14 @@ class GoogleWorkspaceConnector:
             return []
 
         if is_pdf(type_hint) or is_google_workspace_editor(type_hint):
-            wanted = select_visual_pages(page_stats(data), max_pages=max_pages or self._settings.vision_max_pages)
+            cap = max_pages or self._settings.vision_max_pages
+            if pages:
+                # Deduplicated and ordered, and still capped: several chunks of
+                # one document commonly match the same page, and the budget is
+                # the budget however the pages were chosen.
+                wanted = sorted({page for page in pages if page >= 0})[:cap]
+            else:
+                wanted = select_visual_pages(page_stats(data), max_pages=cap)
             if not wanted:
                 return []
             rendered = render_pages(
