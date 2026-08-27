@@ -70,6 +70,15 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # next.config.ts's rewrites() is resolved at `next build`, not at
+        # container start - this has to reach the builder stage as a build
+        # arg, or the proxy target freezes to next.config.ts's own fallback
+        # instead of this service's network name. Kept equal to the
+        # `environment` value below by hand: one is read at build time by
+        # next.config.ts, the other at request time by the server components
+        # and route handlers that also read BACKEND_URL.
+        BACKEND_URL: http://api:8000
     restart: unless-stopped
     environment:
       # Server-side only. The browser never sees this - it talks to the web

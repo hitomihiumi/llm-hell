@@ -13,22 +13,34 @@ WORKDIR /app
 RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# Baked in at build time by Next for anything client-side; the server-side
-# BACKEND_URL is read at runtime, so it is deliberately NOT set here.
+# `next build` resolves next.config.ts's `rewrites()` and freezes the result
+# into .next/routes-manifest.json - `next start` never calls it again. So
+# BACKEND_URL has to be present HERE, at build time, or the proxy target
+# bakes in as next.config.ts's fallback (http://localhost:8000) regardless of
+# whatever docker-compose sets on the running container, which is too late.
+ARG BACKEND_URL=http://api:8000
+ENV BACKEND_URL=$BACKEND_URL
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV CI=true
 RUN pnpm run build
 
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN corepack enable && addgroup -S app && adduser -S app -G app
+# Set CI to true to suppress all interactive pnpm prompts
+ENV CI=true
 
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/next.config.ts ./next.config.ts
+# Create the user/group AND change ownership of the /app directory
+RUN corepack enable && addgroup -S app && adduser -S app -G app \
+    && chown -R app:app /app
+
+# Ensure all copied files are owned by the 'app' user
+COPY --chown=app:app --from=deps /app/node_modules ./node_modules
+COPY --chown=app:app --from=builder /app/.next ./.next
+COPY --chown=app:app --from=builder /app/public ./public
+COPY --chown=app:app --from=builder /app/package.json ./package.json
+COPY --chown=app:app --from=builder /app/next.config.ts ./next.config.ts
 
 USER app
 EXPOSE 3000
