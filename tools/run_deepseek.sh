@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-MODEL="deepseek-ai/DeepSeek-V4-Flash-0731"
+MODEL="lovesenko/DeepSeek-V4-Flash-0731-Abliterated"
 SERVED_NAME="deepseek-v4-flash"
 PORT=8000
 GPUS="0,1,2,3"

@@ -3,6 +3,8 @@ import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { type AgentMode, needsApproval } from "./agentMode";
 import { ApiError, type KnowledgeBaseClient } from "./client";
+import { belongsToProject, type GitlabProject, projectFromConfig } from "./gitlabProject";
+import { callMcpTool, mcpTools } from "./mcp";
 import {
   COMMAND_TIMEOUT_MS,
   commandResult,
@@ -109,6 +111,25 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "search_gitlab_project",
+      description:
+        "Search GitLab scoped to the project this workspace is a checkout of - the repository open in the editor, not the whole GitLab instance. Prefer this over search_knowledge_base for anything about this project's own code, issues or merge requests: it filters out same-named files and duplicate discussions from every other project GitLab hosts. Falls back to saying no project was detected when the workspace has no origin remote.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description:
+              "What to look for, in the words the project's own code or discussion would use",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "read_knowledge_base_result",
       description:
         "Read one search_knowledge_base result in full, by the id it printed. Use this instead of a shell command when an excerpt is not enough - a README you need whole, a file whose entire content matters.",
@@ -141,6 +162,23 @@ export const TOOLS: ToolDefinition[] = [
   },
 ];
 
+const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(TOOLS.map((tool) => tool.function.name));
+
+/**
+ * Every tool the model may call this turn: the fixed set above, plus
+ * whatever `knowledgeBase.mcp.servers` currently publishes.
+ *
+ * Async, and called fresh every turn rather than once per agent run -
+ * `mcp.ts` caches the connections themselves, so a repeat call here is a map
+ * read, not a reconnect, and a server added mid-conversation (after
+ * `knowledgeBase.mcp.reload`) is picked up on the very next round instead of
+ * only in a chat started after it.
+ */
+export async function allTools(): Promise<ToolDefinition[]> {
+  const { definitions } = await mcpTools();
+  return definitions.length ? [...TOOLS, ...definitions] : TOOLS;
+}
+
 /**
  * A path from the model, as a Uri.
  *
@@ -162,6 +200,36 @@ function resolveUri(inputPath: string): vscode.Uri {
 
 function workspaceFolder(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
+let gitlabProjectCache: Promise<GitlabProject | undefined> | undefined;
+
+/**
+ * The current workspace's GitLab project, cached for the extension host's
+ * lifetime - `.git/config` does not change under a running window, and
+ * `search_gitlab_project` reads it on every call.
+ *
+ * Only the first workspace folder, and only a config sitting directly at
+ * `<folder>/.git/config` - a monorepo opened above several checkouts, or a
+ * worktree whose `.git` is a redirect file, finds nothing rather than
+ * guessing which one the user means.
+ */
+function currentGitlabProject(): Promise<GitlabProject | undefined> {
+  if (!gitlabProjectCache) {
+    gitlabProjectCache = (async () => {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (!folder) return undefined;
+      try {
+        const bytes = await vscode.workspace.fs.readFile(
+          vscode.Uri.joinPath(folder.uri, ".git", "config"),
+        );
+        return projectFromConfig(new TextDecoder().decode(bytes));
+      } catch {
+        return undefined;
+      }
+    })();
+  }
+  return gitlabProjectCache;
 }
 
 /**
@@ -199,6 +267,13 @@ export async function executeTool(
     return `Cancelled: ${call.function.name}`;
   }
 
+  if (!BUILTIN_TOOL_NAMES.has(call.function.name)) {
+    const result = await callMcpTool(call.function.name, call.function.arguments);
+    if (result !== undefined) return result;
+    // Falls through to `default:` below - a name that is neither one of the
+    // fixed tools nor anything `mcp.ts` currently publishes.
+  }
+
   switch (call.function.name) {
     case "search_knowledge_base": {
       // Executed here rather than on the backend, like every other tool, so
@@ -214,6 +289,30 @@ export async function executeTool(
         return formatSearchResults(response.hits);
       } catch (error) {
         return `Error searching the knowledge base: ${(error as Error).message}`;
+      }
+    }
+    case "search_gitlab_project": {
+      const query = String(args.query ?? "").trim();
+      if (!query) return "Error: no query provided.";
+      const project = await currentGitlabProject();
+      if (!project) {
+        return (
+          "No GitLab project detected for this workspace - no origin remote in " +
+          ".git/config, or it does not point at a GitLab host. Use search_knowledge_base instead."
+        );
+      }
+      try {
+        const response = await client.search(query, { sources: ["gitlab"], answer: false });
+        const scoped = response.hits.filter((hit) => belongsToProject(hit, project));
+        if (!scoped.length && response.hits.length) {
+          return (
+            `GitLab has ${response.hits.length} result(s) for "${query}", but none in ` +
+            `${project.path}. Use search_knowledge_base for the wider instance.`
+          );
+        }
+        return formatSearchResults(scoped);
+      } catch (error) {
+        return `Error searching GitLab: ${(error as Error).message}`;
       }
     }
     case "read_knowledge_base_result": {
@@ -308,17 +407,20 @@ async function confirmTool(
   mode: AgentMode,
   ask?: ToolConfirmer,
 ): Promise<boolean> {
-  if (!needsApproval(mode, call.function.name)) return true;
+  // A fixed tool's effects are known ahead of time, which is what the
+  // per-mode policy in agentMode.ts is keyed on. An MCP server's are not -
+  // it is arbitrary code the user pointed this at - so every MCP tool is
+  // treated as a changing one regardless of name, in every mode but the one
+  // that has already agreed to ask about nothing.
+  const dynamic = mode !== "autonomous" && !BUILTIN_TOOL_NAMES.has(call.function.name);
+  if (!needsApproval(mode, call.function.name) && !dynamic) return true;
 
   const confirm = vscode.workspace
     .getConfiguration("knowledgeBase")
     .get<boolean>("coder.confirmTools", true);
   if (!confirm) return true;
 
-  const summary =
-    call.function.name === "write_file"
-      ? `Write to ${String(args.path ?? "unknown")}`
-      : `Run command: ${String(args.command ?? "")}`;
+  const summary = summariseForApproval(call, args);
 
   if (ask) return ask(call, args, summary);
 
@@ -328,6 +430,15 @@ async function confirmTool(
     "Allow",
   );
   return answer === "Allow";
+}
+
+function summariseForApproval(call: ToolCall, args: Record<string, unknown>): string {
+  if (call.function.name === "write_file") return `Write to ${String(args.path ?? "unknown")}`;
+  if (call.function.name === "run_terminal") return `Run command: ${String(args.command ?? "")}`;
+  const argSummary = Object.entries(args)
+    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+    .join(", ");
+  return `Call ${call.function.name}${argSummary ? ` with ${argSummary}` : ""}`;
 }
 
 function parseArgs(raw: string): Record<string, unknown> {

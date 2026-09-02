@@ -7,7 +7,7 @@
   "publisher": "llmhell",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.100.0"
+    "vscode": "^1.104.0"
   },
   "categories": [
     "AI",
@@ -67,6 +67,46 @@
           "maximum": 100,
           "description": "Maximum tool rounds for the coding agent."
         },
+        "knowledgeBase.mcp.servers": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "A local server: spawned as `command args...`, spoken to over MCP's stdio transport."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "url": {
+                "type": "string",
+                "description": "A remote server: spoken to over MCP's streamable-HTTP transport. Set this instead of `command`, not alongside it."
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "disabled": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "markdownDescription": "Custom MCP servers `@coder` can call as tools, keyed by name - the same shape most MCP clients use, so an entry from Claude Desktop's or Cursor's config drops in unedited. Use \"Knowledge Base: Manage MCP Servers\" for a guided add/remove instead of editing this directly."
+        },
         "knowledgeBase.coder.mode": {
           "type": "string",
           "enum": [
@@ -85,7 +125,7 @@
       }
     },
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "knowledgeBase",
           "title": "Knowledge Base",
@@ -206,6 +246,22 @@
         "title": "Connect Accounts (Google, GitLab)",
         "category": "Knowledge Base",
         "icon": "$(key)"
+      },
+      {
+        "command": "knowledgeBase.mcp.manage",
+        "title": "Manage MCP Servers",
+        "category": "Knowledge Base",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "knowledgeBase.mcp.reload",
+        "title": "Reload MCP Servers",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.mcp.showLog",
+        "title": "Show MCP Log",
+        "category": "Knowledge Base"
       }
     ],
     "menus": {
@@ -224,6 +280,11 @@
           "command": "knowledgeBase.accounts",
           "when": "view == knowledgeBase.chat",
           "group": "navigation@2"
+        },
+        {
+          "command": "knowledgeBase.mcp.manage",
+          "when": "view == knowledgeBase.chat",
+          "group": "navigation@3"
         },
         {
           "command": "knowledgeBase.openChat",
@@ -341,7 +402,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.2",
     "@types/node": "^20",
-    "@types/vscode": "^1.100.0",
+    "@types/vscode": "^1.104.0",
     "esbuild": "^0.25.0",
     "typescript": "^5"
   },

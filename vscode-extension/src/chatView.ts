@@ -7,7 +7,7 @@ import { applyLanguage, hitUri, type KnowledgeBaseDocuments, proposalUri } from 
 import { collapse } from "./format";
 import { ToolCallAggregator } from "./toolCallAggregator";
 import { truncate } from "./toolOutput";
-import { executeTool, TOOLS, type ToolCall } from "./tools";
+import { allTools, executeTool, type ToolCall } from "./tools";
 import type { SearchHit } from "./types";
 import type {
   ChatMessageView,
@@ -584,7 +584,11 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
 
       const aggregator = new ToolCallAggregator();
       let content = "";
-      for await (const event of this.client.chatCompletionsStream(messages, signal, TOOLS)) {
+      for await (const event of this.client.chatCompletionsStream(
+        messages,
+        signal,
+        await allTools(),
+      )) {
         if (signal.aborted) return;
         const chunk = event.data as {
           choices?: Array<{
@@ -1008,6 +1012,27 @@ const STYLES = `
   .code-action:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
   .code-block pre { margin: 0; padding: 8px 10px; overflow-x: auto; }
   .code-block pre code { background: none; padding: 0; }
+
+  /* A table scrolls inside its own wrapper rather than widening the panel:
+     this view is a sidebar, and a five-column table would otherwise put a
+     horizontal scrollbar under the whole transcript. */
+  .md-table-wrap { overflow-x: auto; margin: 8px 0; }
+  .md-table {
+    border-collapse: collapse;
+    font-size: 12px;
+    /* Not 100%: a narrow table should stay narrow, and a wide one scrolls. */
+    min-width: max-content;
+  }
+  .md-table th, .md-table td {
+    border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border));
+    padding: 4px 8px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .md-table th {
+    background: var(--vscode-editorWidget-background);
+    font-weight: 600;
+  }
 
   /* The model abandoned this sentence to call the tool below it. Shown as a
      dimmed ellipsis rather than hidden, because the fragment is still worth

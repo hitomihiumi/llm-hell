@@ -4,7 +4,7 @@ import type { AgentMode } from "./agentMode";
 import { AuthError, type ChatMessage, type KnowledgeBaseClient } from "./client";
 import { collapse, historyFor } from "./format";
 import { ToolCallAggregator } from "./toolCallAggregator";
-import { executeTool, TOOLS, type ToolCall } from "./tools";
+import { allTools, executeTool, type ToolCall } from "./tools";
 
 /**
  * `@coder` in the chat panel.
@@ -129,7 +129,7 @@ async function runTurn(
   const aggregator = new ToolCallAggregator();
   let content = "";
 
-  for await (const event of client.chatCompletionsStream(messages, signal, TOOLS)) {
+  for await (const event of client.chatCompletionsStream(messages, signal, await allTools())) {
     if (token.isCancellationRequested) break;
 
     const chunk = event.data as {

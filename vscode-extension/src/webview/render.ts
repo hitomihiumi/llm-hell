@@ -338,7 +338,7 @@ function renderToolCall(call: ToolCallView): string {
       // approving a byte count.
       (call.diff
         ? renderDiff(call.diff, call.path, `diff:${call.id}`)
-        : `<pre class="tool-approve-args">${escapeHtml(call.argsFull ?? call.argsSummary)}</pre>`) +
+        : `<pre class="tool-approve-args" data-scroll-key="args:${escapeHtml(call.id)}">${escapeHtml(call.argsFull ?? call.argsSummary)}</pre>`) +
       '<div class="tool-approve">' +
       diff +
       `<button type="button" class="tool-approve-action tool-approve-deny" data-confirm-tool="${escapeHtml(call.id)}" data-allow="false">Cancel</button>` +
@@ -349,7 +349,7 @@ function renderToolCall(call: ToolCallView): string {
   }
 
   const result = call.result
-    ? `<pre class="tool-result" data-scroll-key="result:${escapeHtml(call.id)}">${escapeHtml(truncateResult(call.result))}</pre>`
+    ? `<pre class="tool-result" data-scroll-key="result:${escapeHtml(call.id)}">${renderToolResultBody(call)}</pre>`
     : "";
   const diff = call.diff ? renderDiff(call.diff, call.path, `diff:${call.id}`) : "";
   return (
@@ -424,4 +424,27 @@ function truncateTitle(title: string): string {
 
 function truncateResult(result: string): string {
   return result.length > 4000 ? `${result.slice(0, 4000)}…` : result;
+}
+
+/** Which tools hand back a file's own content, keyed to where its path lives in the card. */
+const FILE_CONTENT_TOOLS: Record<string, (call: ToolCallView) => string | undefined> = {
+  read_file: (call) => call.argsSummary,
+};
+
+/**
+ * A tool result, coloured when it is a file's own content and a path is
+ * known to pick a language from - plain otherwise.
+ *
+ * `read_file` is the case this exists for: its result is exactly what would
+ * be open in an editor tab, and an editor tab is not plain text. Errors are
+ * left alone deliberately - "Error reading file: ENOENT" run through a
+ * lexer whose one structural rule is "a name before `(` is a call" adds
+ * nothing and risks painting a stack trace as though it meant something.
+ */
+function renderToolResultBody(call: ToolCallView): string {
+  const result = truncateResult(call.result ?? "");
+  const pathFor = FILE_CONTENT_TOOLS[call.name];
+  if (!pathFor || result.startsWith("Error")) return escapeHtml(result);
+  const language = languageFromPath(pathFor(call));
+  return highlight(result, language);
 }

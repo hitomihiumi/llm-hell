@@ -201,3 +201,77 @@ test("code inside a block is still escaped now that it sits in a wrapper", () =>
   assert.ok(html.includes("&lt;script&gt;"));
   assert.ok(!html.includes("<script>alert(1)</script>"));
 });
+
+// --- tables ------------------------------------------------------------------
+//
+// Answers arrive full of them - a requirements matrix, a comparison, a
+// per-source breakdown - and without this they were rendered as one long
+// paragraph of pipes, because a paragraph joins its lines with a space.
+
+test("a table becomes a table", () => {
+  const html = renderMarkdown(
+    ["| Requirement | Minimum |", "|---|---|", "| Node.js | 20.9.0 |"].join("\n"),
+  );
+
+  assert.ok(html.includes("<table"));
+  assert.ok(html.includes("<th>Requirement</th>"));
+  assert.ok(html.includes("<td>20.9.0</td>"));
+  assert.ok(!html.includes("|---|"), "the delimiter row is structure, not content");
+});
+
+test("a delimiter row with spaces and colons is still a delimiter row", () => {
+  const html = renderMarkdown(["| a | b | c |", "| :-- | :-: | --: |", "| 1 | 2 | 3 |"].join("\n"));
+
+  assert.ok(html.includes('<th style="text-align:left">a</th>'));
+  assert.ok(html.includes('<th style="text-align:center">b</th>'));
+  assert.ok(html.includes('<th style="text-align:right">c</th>'));
+});
+
+test("prose that merely contains a pipe is left as prose", () => {
+  /* The whole reason the header is only a header when a delimiter row
+     follows it: `a | b` in a sentence is not a table. */
+  const html = renderMarkdown("use a | b in a sentence\nand a second line");
+
+  assert.ok(!html.includes("<table"));
+  assert.ok(html.includes("<p>"));
+});
+
+test("a short row is padded so the columns stay under their headings", () => {
+  const html = renderMarkdown(["| a | b | c |", "|---|---|---|", "| 1 |"].join("\n"));
+
+  assert.equal(html.match(/<td/g)?.length, 3);
+});
+
+test("a row longer than the header is cut rather than skewing the table", () => {
+  const html = renderMarkdown(["| a | b |", "|---|---|", "| 1 | 2 | 3 |"].join("\n"));
+
+  assert.equal(html.match(/<td/g)?.length, 2);
+});
+
+test("an escaped pipe is content, not a cell boundary", () => {
+  const html = renderMarkdown(["| pattern |", "|---|", "| a \\| b |"].join("\n"));
+
+  assert.equal(html.match(/<td/g)?.length, 1);
+  assert.ok(html.includes("a | b"));
+});
+
+test("a table ends where its rows do", () => {
+  const html = renderMarkdown(["| a |", "|---|", "| 1 |", "", "a following paragraph"].join("\n"));
+
+  assert.ok(html.includes("</table>"));
+  assert.ok(html.includes("<p>a following paragraph</p>"));
+});
+
+test("cell content is inline-rendered and still escaped", () => {
+  const html = renderMarkdown(["| what |", "|---|", "| **bold** and <script> |"].join("\n"));
+
+  assert.ok(html.includes("<strong>bold</strong>"));
+  assert.ok(html.includes("&lt;script&gt;"));
+  assert.ok(!html.includes("<script>"));
+});
+
+test("a table without a delimiter row is not a table", () => {
+  const html = renderMarkdown(["| a | b |", "| 1 | 2 |"].join("\n"));
+
+  assert.ok(!html.includes("<table"));
+});

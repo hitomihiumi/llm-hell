@@ -7,6 +7,8 @@ import { registerCoderParticipant } from "./coder";
 import { manageCredentials, offerMissing } from "./credentials";
 import { answerUri, applyLanguage, hitUri, KnowledgeBaseDocuments, SCHEME } from "./documents";
 import { answerMarkdown, collapse } from "./format";
+import { disposeMcpServers, mcpOutputChannel, reloadMcpServers } from "./mcp";
+import { manageMcpServers } from "./mcpSettings";
 import { ResultsProvider } from "./resultsView";
 import type { SearchHit, SearchResponse } from "./types";
 
@@ -132,6 +134,19 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("knowledgeBase.openChat", () => askInChat("")),
 
     vscode.commands.registerCommand("knowledgeBase.accounts", () => manageCredentials(client)),
+
+    vscode.commands.registerCommand("knowledgeBase.mcp.manage", () => manageMcpServers()),
+    vscode.commands.registerCommand("knowledgeBase.mcp.reload", () => {
+      reloadMcpServers();
+      vscode.window.showInformationMessage("MCP servers will reconnect on the next tool call.");
+    }),
+    vscode.commands.registerCommand("knowledgeBase.mcp.showLog", () => mcpOutputChannel().show()),
+
+    // A server added, removed or edited outside the guided flow - by hand in
+    // settings.json - should not need a window reload to take effect.
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("knowledgeBase.mcp.servers")) reloadMcpServers();
+    }),
 
     vscode.commands.registerCommand("knowledgeBase.openCoderChat", () => askInCoderChat("")),
 
@@ -338,8 +353,10 @@ function registerCoder(
 }
 
 export function deactivate(): void {
-  // Nothing to tear down: every disposable is on the context's subscriptions,
-  // and the session lives in memory only.
+  // Every disposable in this window is on the context's subscriptions and the
+  // session lives in memory only - except a custom MCP server's own process,
+  // which is not a vscode.Disposable and would otherwise outlive the window.
+  disposeMcpServers();
 }
 
 // --- the pieces --------------------------------------------------------------
