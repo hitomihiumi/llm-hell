@@ -1,7 +1,7 @@
 /**
  * Reading the server's event stream.
  *
- * `/api/search/stream` sends results about a second in, then the answer a
+ * `/api/chat/completions` sends the answer a
  * token at a time — which is the whole reason the chat participant feels like
  * a chat rather than a spinner. Parsing that is small, fiddly and entirely
  * pure, so it lives here where `node --test` can reach it.

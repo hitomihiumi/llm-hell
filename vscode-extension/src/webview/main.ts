@@ -1,10 +1,8 @@
-import { groupReferences, matchesFilter } from "../hitGroups.ts";
 import type {
   AgentMode,
   ChatMessageView,
   ContextItemView,
   HostMessage,
-  Mode,
 } from "../webviewProtocol.ts";
 import { renderContextItems, renderMessage, renderWelcome } from "./render.ts";
 import { connectVsCodeApi } from "./vscodeApi.ts";
@@ -22,9 +20,7 @@ const MAX_INPUT_HEIGHT = 180;
 
 let messages: ChatMessageView[] = [];
 let contextItems: ContextItemView[] = [];
-let mode: Mode = "kb";
 let agentMode: AgentMode = "manual";
-let sourceFilter: string | null = null;
 let sending = false;
 
 const root = document.getElementById("root");
@@ -39,22 +35,15 @@ root.innerHTML = `
   <div class="composer">
     <div class="context-chips" id="context-chips"></div>
     <div class="composer-box">
-      <textarea id="input" rows="1" placeholder="Ask a question…"></textarea>
+      <textarea id="input" rows="1" placeholder="Ask the coder to do something…"></textarea>
       <div class="composer-toolbar">
         <button type="button" id="attach-button" class="icon-button" title="Add a file to the context" aria-label="Add context">
           <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
         </button>
-        <select id="mode-select" class="toolbar-select" title="Which backend answers" aria-label="Mode">
-          <option value="kb">@kb</option>
-          <option value="coder">@coder</option>
-        </select>
         <select id="agent-mode" class="toolbar-select" title="Tool approval policy" aria-label="Agent mode">
           <option value="manual">Manual</option>
           <option value="assisted">Assisted</option>
           <option value="autonomous">Autonomous</option>
-        </select>
-        <select id="source-filter" class="toolbar-select" title="Show only results from one repository or document" aria-label="Filter by document">
-          <option value="">All results</option>
         </select>
         <span class="composer-spacer"></span>
         <button type="button" id="stop-button" class="icon-button icon-button-stop" hidden title="Stop" aria-label="Stop">
@@ -74,9 +63,7 @@ const sendButton = requireEl<HTMLButtonElement>("send-button");
 const stopButton = requireEl<HTMLButtonElement>("stop-button");
 const banner = requireEl<HTMLDivElement>("signin-banner");
 const attachButton = requireEl<HTMLButtonElement>("attach-button");
-const modeSelectEl = requireEl<HTMLSelectElement>("mode-select");
 const agentModeEl = requireEl<HTMLSelectElement>("agent-mode");
-const sourceFilterEl = requireEl<HTMLSelectElement>("source-filter");
 const contextChipsEl = requireEl<HTMLDivElement>("context-chips");
 
 function requireEl<T extends HTMLElement>(id: string): T {
@@ -163,7 +150,7 @@ function toggleCard(summary: HTMLElement): void {
 
 function renderMessages(): void {
   if (!messages.length) {
-    messagesEl.innerHTML = renderWelcome(mode);
+    messagesEl.innerHTML = renderWelcome();
     return;
   }
 
@@ -179,16 +166,7 @@ function renderMessages(): void {
   // current open/scroll state still exists anywhere.
   harvestOpenAndScroll();
 
-  messagesEl.innerHTML = messages
-    .map((message) =>
-      renderMessage({
-        ...message,
-        references: message.references?.filter((reference) =>
-          matchesFilter(reference, sourceFilter),
-        ),
-      }),
-    )
-    .join("");
+  messagesEl.innerHTML = messages.map(renderMessage).join("");
 
   // Synchronously, in the same frame the new HTML lands, so nothing is ever
   // painted in the collapsed state.
@@ -199,77 +177,10 @@ function renderMessages(): void {
   }
 }
 
-function setMode(next: Mode): void {
-  mode = next;
-  modeSelectEl.value = next;
-  // Attachments are read into the agent's prompt. A federated search has
-  // nowhere to put them, so the button is hidden rather than offered and
-  // quietly ignored.
-  attachButton.hidden = next !== "coder";
-  agentModeEl.hidden = next !== "coder";
-  sourceFilterEl.hidden = next !== "kb";
-  inputEl.placeholder = next === "kb" ? "Ask a question…" : "Ask the coder to do something…";
-  vscode.post({ type: "setMode", mode: next });
-  if (!messages.length) renderMessages();
-}
-
 function setAgentMode(next: AgentMode): void {
   agentMode = next;
   agentModeEl.value = next;
   vscode.post({ type: "setAgentMode", mode: next });
-}
-
-/**
- * Rebuild the filter from the repositories and documents actually in the
- * transcript.
- *
- * Two levels in a flat `<select>` rather than a tree widget: both a container
- * and a document have to be selectable, and `<optgroup>` labels are not - so
- * an optgroup could name a repository and never let you pick it. Indentation
- * carries the nesting instead, which also survives a 300px sidebar, where a
- * real tree would not.
- *
- * A dot marks what the answer actually cited, and those sort first.
- */
-function refreshSourceFilter(): void {
-  const references = messages.flatMap((message) => message.references ?? []);
-  const cited = new Set(
-    messages.flatMap((message) =>
-      (message.citations ?? []).map((citation) => citation.hitId).filter(Boolean),
-    ) as string[],
-  );
-  const groups = groupReferences(references, cited);
-
-  sourceFilterEl.innerHTML = "";
-  sourceFilterEl.append(option("", "All results"));
-  for (const group of groups) {
-    sourceFilterEl.append(option(group.key, label(group.title, group.cited, 0)));
-    if (group.standalone) continue;
-    for (const document of group.documents) {
-      sourceFilterEl.append(option(document.key, label(document.title, document.cited, 1)));
-    }
-  }
-
-  // A selection whose group is gone - a new search returned different
-  // results - would leave the box showing nothing and every hit filtered
-  // out. Fall back to showing everything.
-  const keys = new Set([...sourceFilterEl.options].map((entry) => entry.value));
-  if (sourceFilter && !keys.has(sourceFilter)) sourceFilter = null;
-  sourceFilterEl.value = sourceFilter ?? "";
-  sourceFilterEl.hidden = mode !== "kb" || groups.length === 0;
-}
-
-function option(value: string, text: string): HTMLOptionElement {
-  const element = document.createElement("option");
-  element.value = value;
-  element.textContent = text;
-  return element;
-}
-
-function label(title: string, cited: boolean, depth: number): string {
-  // Figure space, not a plain space: a select trims leading whitespace, and
-  // the indentation is the only thing carrying the nesting.
-  return `${"  ".repeat(depth)}${cited ? "● " : ""}${title}`;
 }
 
 function setSending(value: boolean): void {
@@ -295,7 +206,6 @@ function autoGrow(): void {
   inputEl.style.height = `${Math.min(inputEl.scrollHeight, MAX_INPUT_HEIGHT)}px`;
 }
 
-setMode(mode);
 setAgentMode(agentMode);
 renderMessages();
 
@@ -307,7 +217,7 @@ function send(): void {
   inputEl.value = "";
   autoGrow();
   setSending(true);
-  vscode.post({ type: "send", text, mode });
+  vscode.post({ type: "send", text });
 }
 
 sendButton.addEventListener("click", send);
@@ -323,17 +233,11 @@ inputEl.addEventListener("keydown", (event) => {
   }
 });
 
-modeSelectEl.addEventListener("change", () => setMode(modeSelectEl.value as Mode));
 agentModeEl.addEventListener("change", () => setAgentMode(agentModeEl.value as AgentMode));
 attachButton.addEventListener("click", () => vscode.post({ type: "pickContext" }));
 requireEl<HTMLButtonElement>("signin-button").addEventListener("click", () => {
   vscode.post({ type: "signIn" });
 });
-sourceFilterEl.addEventListener("change", () => {
-  sourceFilter = sourceFilterEl.value || null;
-  renderMessages();
-});
-
 contextChipsEl.addEventListener("click", (event) => {
   const remove = (event.target as HTMLElement).closest<HTMLElement>("[data-remove-context]");
   if (remove) vscode.post({ type: "removeContext", id: remove.dataset.removeContext ?? "" });
@@ -435,14 +339,6 @@ messagesEl.addEventListener("click", (event) => {
     return;
   }
 
-  const reference = target.closest<HTMLElement>("[data-open-reference]");
-  if (reference) {
-    event.preventDefault();
-    const url = reference.dataset.url || null;
-    vscode.post({ type: "openReference", hitId: reference.dataset.openReference ?? "", url });
-    return;
-  }
-
   const anchor = target.closest("a");
   if (anchor?.href) {
     // Every link a webview renders is either an external permalink or a
@@ -460,7 +356,6 @@ vscode.onMessage((message: HostMessage) => {
   switch (message.type) {
     case "init":
       setSignedIn(message.signedIn);
-      setMode(message.mode);
       setAgentMode(message.agentMode);
       break;
     case "signedIn":
@@ -468,7 +363,6 @@ vscode.onMessage((message: HostMessage) => {
       break;
     case "messages":
       messages = message.messages;
-      refreshSourceFilter();
       // A turn is in flight for as long as the last message is still
       // streaming - this is what un-disables the composer once an answer
       // (or a tool-calling turn) actually finishes, including on the empty

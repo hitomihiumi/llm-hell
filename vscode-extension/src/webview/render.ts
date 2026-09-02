@@ -1,13 +1,7 @@
 import type { DiffLine, FileDiff } from "../diff.ts";
 import { highlight, languageFromPath } from "../highlight.ts";
-import { escapeHtml, renderAnswer } from "../markdown.ts";
-import type {
-  ChatMessageView,
-  ContextItemView,
-  Mode,
-  SourceStatusView,
-  ToolCallView,
-} from "../webviewProtocol.ts";
+import { escapeHtml, renderMarkdown } from "../markdown.ts";
+import type { ChatMessageView, ContextItemView, ToolCallView } from "../webviewProtocol.ts";
 
 /**
  * Turning one transcript entry into HTML, as a string.
@@ -27,7 +21,7 @@ import type {
 
 const ROLE_LABEL: Record<ChatMessageView["role"], string> = {
   user: "You",
-  assistant: "Knowledge Base",
+  assistant: "Coder",
 };
 
 const TOOL_STATUS_LABEL: Record<ToolCallView["status"], string> = {
@@ -60,26 +54,17 @@ export function renderMessage(message: ChatMessageView): string {
     `<div class="message message-${message.role}" data-id="${escapeHtml(message.id)}">`,
     `<div class="message-head">` +
       `<span class="message-avatar" aria-hidden="true">${AVATAR[message.role]}</span>` +
-      `<span class="message-role">${ROLE_LABEL[message.role]}${message.role === "assistant" && message.mode === "coder" ? " · coder" : ""}</span>` +
+      `<span class="message-role">${ROLE_LABEL[message.role]}</span>` +
       (message.role === "assistant" && message.status !== "streaming"
         ? `<span class="message-actions">${renderMessageActions()}</span>`
         : "") +
       "</div>",
   ];
 
-  if (message.sourceStatus?.length) {
-    parts.push(renderSourceStatuses(message.sourceStatus));
-  }
-
-  if (message.references?.length) {
-    parts.push(renderReferences(message.references));
-  }
-
   // Walked in order rather than gathered by type: a tool call belongs where
   // it happened, between the sentence that led to it and the sentence written
   // once it came back. Collecting them into a list at the bottom is what made
   // an agent turn unreadable.
-  const citations = message.citations ?? [];
   message.parts.forEach((part, index) => {
     if (part.kind === "tool") {
       parts.push(`<div class="tool-calls">${renderToolCall(part.call)}</div>`);
@@ -98,7 +83,7 @@ export function renderMessage(message: ChatMessageView): string {
         return;
       }
       const truncated = message.parts[index + 1]?.kind === "tool" && looksTruncated(part.text);
-      const rendered = renderAnswer(part.text, citations);
+      const rendered = renderMarkdown(part.text);
       parts.push(
         `<div class="message-body">${truncated ? withCutMarker(rendered) : rendered}</div>`,
       );
@@ -107,10 +92,6 @@ export function renderMessage(message: ChatMessageView): string {
 
   if (message.status === "streaming" && !message.parts.length) {
     parts.push('<div class="message-body message-pending" aria-label="Working">⋯</div>');
-  }
-
-  if (message.citations?.length) {
-    parts.push(renderCitations(message.citations));
   }
 
   if (message.status === "error" && message.error) {
@@ -145,7 +126,7 @@ const CUT_MARKER =
 /**
  * Put the marker at the end of the last paragraph, not after it.
  *
- * `renderAnswer` returns block-level HTML, so appending the span to the
+ * `renderMarkdown` returns block-level HTML, so appending the span to the
  * rendered string would drop the ellipsis onto its own line - which reads as
  * a new thought rather than as the end of the truncated one.
  */
@@ -164,47 +145,34 @@ function renderMessageActions(): string {
   ).join("");
 }
 
-/** The suggestions offered on an empty transcript, per mode. */
-const SUGGESTIONS: Record<Mode, readonly string[]> = {
-  kb: [
-    "Які розміри у t motor u7?",
-    "Що написано в README репозиторію auth-service?",
-    "Які рішення ми ухвалили щодо шасі?",
-  ],
-  coder: [
-    "Поясни, що робить цей файл",
-    "Додай тест на цю функцію",
-    "Знайди, де в базі знань описано цей формат",
-  ],
-};
+/** The suggestions offered on an empty transcript. */
+const SUGGESTIONS: readonly string[] = [
+  "Поясни, що робить цей файл",
+  "Додай тест на цю функцію",
+  "Знайди, де в базі знань описано цей формат",
+];
 
-const MODE_BLURB: Record<Mode, string> = {
-  kb: "Питання по Google Workspace, GitLab і внутрішній базі знань. Відповідь приходить з посиланнями на джерела, які її підтверджують.",
-  coder:
-    "Агент, що читає і пише файли у твоєму воркспейсі, запускає команди й шукає в базі знань — по колу, доки задача не зроблена.",
-};
+const BLURB =
+  "Агент, що читає і пише файли у твоєму воркспейсі, запускає команди й шукає в базі знань — по колу, доки задача не зроблена.";
 
 /**
  * What an empty transcript shows.
  *
  * Not decoration: an assistant with no history and no placeholder is a blank
- * rectangle that says nothing about what it can be asked, and the two modes
- * do genuinely different jobs. The suggestions are per mode for that reason.
+ * rectangle that says nothing about what it can be asked.
  */
-export function renderWelcome(mode: Mode): string {
-  const chips = SUGGESTIONS[mode]
-    .map(
-      (suggestion) =>
-        `<button type="button" class="suggestion" data-suggestion="${escapeHtml(suggestion)}">${escapeHtml(suggestion)}</button>`,
-    )
-    .join("");
+export function renderWelcome(): string {
+  const chips = SUGGESTIONS.map(
+    (suggestion) =>
+      `<button type="button" class="suggestion" data-suggestion="${escapeHtml(suggestion)}">${escapeHtml(suggestion)}</button>`,
+  ).join("");
   return (
     '<div class="welcome">' +
     '<div class="welcome-icon" aria-hidden="true">' +
     '<svg viewBox="0 0 16 16" width="28" height="28"><path d="M8 1.6l1.7 4.7 4.7 1.7-4.7 1.7L8 14.4l-1.7-4.7L1.6 8l4.7-1.7z" fill="currentColor"/></svg>' +
     "</div>" +
-    `<div class="welcome-title">${mode === "kb" ? "Knowledge Base" : "Coder"}</div>` +
-    `<p class="welcome-blurb">${escapeHtml(MODE_BLURB[mode])}</p>` +
+    '<div class="welcome-title">Coder</div>' +
+    `<p class="welcome-blurb">${escapeHtml(BLURB)}</p>` +
     `<div class="suggestions">${chips}</div>` +
     "</div>"
   );
@@ -240,59 +208,6 @@ export function renderContextItems(items: ContextItemView[]): string {
       );
     })
     .join("");
-}
-
-/**
- * What each source did, next to the answer it did or did not contribute to.
- *
- * Three outcomes, because they mean different things and a single "failed"
- * would flatten them: a source that answered, one that answered partially
- * (degraded - it responded, but not with everything it holds), and one that
- * could not be reached at all. The last carries its reason, since "Drive
- * returned nothing" and "Drive timed out" lead somewhere different.
- */
-function renderSourceStatuses(statuses: SourceStatusView[]): string {
-  const chips = statuses
-    .map((status) => {
-      const state = !status.ok ? "unavailable" : status.degraded ? "partial" : "answered";
-      const detail = status.error
-        ? ` — ${escapeHtml(status.error)}`
-        : ` · ${status.hits} ${status.hits === 1 ? "hit" : "hits"}`;
-      return (
-        `<span class="source-status source-status-${state}" title="${escapeHtml(status.displayName)}${escapeHtml(status.error ?? "")}">` +
-        `${escapeHtml(status.displayName)}${detail}</span>`
-      );
-    })
-    .join("");
-  return `<div class="source-statuses">${chips}</div>`;
-}
-
-function renderReferences(references: ChatMessageView["references"]): string {
-  const chips = (references ?? [])
-    .map(
-      (reference) =>
-        `<button type="button" class="chip" data-open-reference="${escapeHtml(reference.hitId)}" data-url="${escapeHtml(reference.url ?? "")}" title="${escapeHtml(reference.title)}">` +
-        `<span class="chip-source">${escapeHtml(reference.source)}</span>${escapeHtml(truncateTitle(reference.title))}` +
-        "</button>",
-    )
-    .join("");
-  return `<div class="references">${chips}</div>`;
-}
-
-function renderCitations(citations: ChatMessageView["citations"]): string {
-  // A `<ul>`, deliberately, with the number written out by hand: an `<ol>`
-  // numbers its own items 1, 2, 3..., which collided with the citation's own
-  // number and rendered "1. 1." for the first entry. The two are not always
-  // the same thing either - `citation.n` is the number the answer's `[n]`
-  // actually uses, and the API already drops the numbers a model invented,
-  // so a real citation list can have gaps a plain ordinal would paper over.
-  const rows = (citations ?? [])
-    .map((citation) => {
-      const label = `${escapeHtml(citation.title)} <span class="citation-source">${escapeHtml(citation.source)}</span>`;
-      return `<li>${citation.n}. ${citation.url ? `<a href="${escapeHtml(citation.url)}" data-external="true">${label}</a>` : label}</li>`;
-    })
-    .join("");
-  return `<ul class="citations">${rows}</ul>`;
 }
 
 /**
@@ -416,10 +331,6 @@ function renderDiff(diff: FileDiff, path: string | undefined, scrollKey?: string
       : "") +
     "</div>"
   );
-}
-
-function truncateTitle(title: string): string {
-  return title.length > 60 ? `${title.slice(0, 60)}…` : title;
 }
 
 function truncateResult(result: string): string {

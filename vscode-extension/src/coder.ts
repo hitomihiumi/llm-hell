@@ -9,10 +9,9 @@ import { allTools, executeTool, type ToolCall } from "./tools";
 /**
  * `@coder` in the chat panel.
  *
- * Where `@kb` searches the corpus and cites what it found, `@coder` is an
- * agent: the backend hands the conversation to a tool-calling model — DeepSeek
- * by default, pinned with `AGENT_MODEL_ID` — and this participant runs
- * whatever that model asks for.
+ * The backend hands the conversation to a tool-calling model — DeepSeek by
+ * default, pinned with `AGENT_MODEL_ID` — and this participant runs whatever
+ * that model asks for.
  *
  * The tools run in the extension host, because that is where the files and the
  * terminal are. `search_knowledge_base` runs here too and reaches the backend

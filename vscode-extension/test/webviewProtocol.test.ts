@@ -101,7 +101,6 @@ test("visibleText is the answer, without the model's thinking", () => {
   const text = visibleText({
     id: "m1",
     role: "assistant",
-    mode: "coder",
     status: "done",
     parts: [
       { kind: "reasoning", text: "Let me think about this." },

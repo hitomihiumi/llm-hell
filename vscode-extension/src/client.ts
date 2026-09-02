@@ -4,14 +4,7 @@
 import { parseCookies, readSetCookie, withScheme } from "./http.ts";
 import { type ServerEvent, SseParser } from "./sse.ts";
 import type { ToolDefinition } from "./tools.ts";
-import type {
-  ChatTurn,
-  Content,
-  CredentialStatus,
-  GoogleAuthStart,
-  SearchResponse,
-  Source,
-} from "./types";
+import type { Content, CredentialStatus, GoogleAuthStart, SearchResponse } from "./types";
 
 /**
  * The HTTP side of the extension.
@@ -116,6 +109,20 @@ export class KnowledgeBaseClient {
     await this.secrets.store(PASSWORD_KEY, credentials.password);
   }
 
+  /**
+   * Drop the session without logging out.
+   *
+   * For a change of backend, where `signOut` would be wrong twice over: the
+   * logout would go to whichever backend is configured *now* rather than the
+   * one the session belongs to, and it would delete the stored password,
+   * which is not what changing an address asks for. The cookies have no host
+   * attached to them, so leaving them in place would present one backend's
+   * session to another.
+   */
+  forgetSession(): void {
+    this.cookies.clear();
+  }
+
   async signOut(): Promise<void> {
     // Best effort: the local session is dropped either way, so a backend that
     // is down cannot leave the extension believing it is still signed in.
@@ -138,62 +145,6 @@ export class KnowledgeBaseClient {
       limit: options.limit ?? null,
       answer: options.answer ?? true,
     });
-  }
-
-  /**
-   * A search as it happens: results first, then the answer a token at a time.
-   *
-   * The order is the point. The server emits `hits` about a second in, while
-   * the model is still writing, so a chat can show what it found and then
-   * type the answer underneath instead of sitting on a spinner until both are
-   * done.
-   *
-   * Events are yielded as they arrive. `signal` aborts the request, which is
-   * what a cancelled chat turn needs.
-   */
-  async *searchStream(
-    query: string,
-    options: { sources?: string[]; limit?: number; answer?: boolean; history?: ChatTurn[] },
-    signal?: AbortSignal,
-  ): AsyncGenerator<ServerEvent> {
-    const response = await this.authorised(
-      "POST",
-      "/api/search/stream",
-      {
-        query,
-        sources: options.sources?.length ? options.sources : null,
-        limit: options.limit ?? null,
-        answer: options.answer ?? true,
-        history: options.history?.length ? options.history : null,
-      },
-      { accept: "text/event-stream", signal },
-    );
-
-    const body = response.body;
-    if (!body) {
-      throw new ApiError("The server sent no stream to read.", response.status);
-    }
-
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    const parser = new SseParser();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        for (const event of parser.push(decoder.decode(value, { stream: true }))) {
-          yield event;
-        }
-      }
-      for (const event of parser.flush()) {
-        yield event;
-      }
-    } finally {
-      // Releasing matters on an early return - a generator abandoned partway
-      // through would otherwise hold the socket until it was collected.
-      reader.releaseLock();
-      if (!signal?.aborted) await body.cancel().catch(() => undefined);
-    }
   }
 
   /**
@@ -302,10 +253,6 @@ export class KnowledgeBaseClient {
 
   async disconnect(provider: string): Promise<void> {
     await this.authorised("DELETE", `/api/credentials/${encodeURIComponent(provider)}`);
-  }
-
-  async sources(): Promise<Source[]> {
-    return this.json<Source[]>("GET", "/api/sources");
   }
 
   // --- the plumbing --------------------------------------------------------

@@ -1,75 +1,41 @@
-# Knowledge Base — VS Code extension
+# Coder — VS Code extension
 
-`@kb` in the chat panel. Ask across Google Workspace, GitLab and the internal
-knowledge base; the answer streams in with the results it read attached, and a
-follow-up knows what you were talking about.
-
-```
-@kb які розміри у t motor u7?
-@kb а вага?
-```
-
-It is a thin client on purpose. The backend already plans the queries, fuses
-the sources and writes the cited answer; nothing here re-implements any of
-that. The editor supplies the two things the web app cannot: a conversation
-for the query planner to read, and a real document to open a code hit into.
-
----
-
-## Why a chat participant and not a panel
-
-The backend plans a search **from the transcript**. Asked "чи присутній тут
-гіроскоп" it finds nothing on its own — `тут` lives in the previous turn, and
-the datasheet says `IMU: MPU6000`, not "гіроскоп". Given the turn that named
-the board, the planner rewrites it as `F722 IMU`, `F722 gyro`, `F722 MPU6000`
-and the answer comes back correct.
-
-A sidebar has no conversation to hand it. A chat does, and the editor already
-owns the transcript, the follow-up buttons, cancellation and the reference UI.
-So `@kb` is a pipe between the two:
-
-| the panel | the backend |
-| --- | --- |
-| transcript | `history`, which the planner reads |
-| references | the hits, listed the way Copilot lists the files it opened |
-| streamed Markdown | `token` events, straight through |
-| `[1]` links | citations, resolved against the results that were really in the prompt |
-
-Results appear about a second in and the answer is written underneath them,
-because the server sends them in that order and nothing here buffers.
-
-`/find` runs the same search with the model left out: the list, fast, nothing
-billed.
-
----
-
-## `@coder` — the agent
-
-`@kb` answers from the corpus. `@coder` acts: it reads and writes files, runs
-commands, and searches the knowledge base, looping until the job is done.
+A coding agent in the editor, backed by the team's knowledge base and by
+whatever MCP servers you point it at.
 
 ```
 @coder add a --dry-run flag to the seed script and show me the diff
 @coder what did we decide about the landing gear, and does the CAD match?
 ```
 
-The model is **DeepSeek V4 Flash**, pinned with `AGENT_MODEL_ID`. It is a
-different model from the one that writes `@kb`'s answers, and deliberately so:
-`@kb` needs a reader, `@coder` needs a model that emits structured
-`tool_calls`, and the endpoint is registered with `--tools-mode native`
-because DeepSeek speaks the OpenAI tools API rather than the JSON-in-content
-fallback.
+It is a thin client on purpose. The backend runs the model and the retrieval;
+nothing here re-implements either. What the editor adds is the two things a
+browser tab cannot: the agent's tools run where the files and the terminal
+actually are, and the conversation happens beside the code.
+
+---
+
+## The agent
+
+It reads and writes files, runs commands, and searches the knowledge base,
+looping until the job is done.
+
+The model is **DeepSeek V4 Flash**, pinned with `AGENT_MODEL_ID`, and the
+endpoint is registered with `--tools-mode native` because DeepSeek speaks the
+OpenAI tools API rather than the JSON-in-content fallback.
 
 | tool | |
 | --- | --- |
 | `read_file`, `list_directory` | capped at 24 000 characters, and the cut says how much is missing |
 | `write_file` | asks first |
 | `run_terminal` | asks first; killed after two minutes, so a dev server cannot hold the turn open |
-| `search_knowledge_base` | the same federated search `@kb` runs, without the answer step |
+| `search_knowledge_base` | the backend's federated search over Drive, Gmail, GitLab and the knowledge base, without the answer step |
+| `search_gitlab_project` | the same search, scoped to the repository this workspace is a checkout of |
+| any MCP tool | whatever `knowledgeBase.mcp.servers` publishes — see below |
 
-Every tool runs in the extension host, including the search one. That is not
-where the search happens — it reaches the backend from here — but keeping all
-four on one side of the wire means the agent loop has one shape rather than
+Every tool runs in the extension host, including the search ones. That is not
+where the search happens — it reaches the backend from here — but keeping them
+all on one side of the wire means the agent loop has one shape rather than
 two.
 
 Confirmation is on by default, and `knowledgeBase.coder.mode` decides what it
@@ -96,16 +62,16 @@ The loop stops after `knowledgeBase.coder.maxAgentTurns` rounds of tool calls
 
 ## The chat in the sidebar
 
-`@kb` and `@coder` also live in VS Code's own chat panel, and that stays — it
-needs no explaining and works the moment the extension is installed. The
-**Knowledge Base** container in the Secondary Side Bar holds the other thing: a
-chat this extension fully owns, built from scratch rather than borrowed from the
-native chat renderer, with **Results** underneath it.
+`@coder` also lives in VS Code's own chat panel, and that stays — it needs no
+explaining and works the moment the extension is installed. The **Knowledge
+Base** container in the Secondary Side Bar holds the other thing: a chat this
+extension fully owns, built from scratch rather than borrowed from the native
+chat renderer.
 
 It is a second *renderer* for the identical backend events, not a second
-implementation — the same `/api/search/stream` and `/api/chat/completions`
-routes, the same tools, the same agent loop. Owning the surface is what buys
-the four things the native renderer cannot be asked for.
+implementation — the same `/api/chat/completions` route, the same tools, the
+same agent loop. Owning the surface is what buys the four things the native
+renderer cannot be asked for.
 
 **A code block is something you can act on.** Copy, insert at the cursor,
 create a new file from it, and — for a shell fence only — send it to the
@@ -223,14 +189,39 @@ become a tag, including through a fence's own language tag.
 
 | | |
 | --- | --- |
-| `Ctrl+Alt+K` | opens the chat carrying the editor selection |
-| `Ctrl+Alt+Shift+K` | opens the chat empty |
-| **Knowledge Base** sidebar | every result the chat found, still browsable after the answer has scrolled away |
-| Clicking a result | a read-only editor tab — a code hit arrives with its language, so find and go-to-line work |
-| **Choose Sources** | a checklist, remembered per window, so one project can search GitLab only |
+| `Ctrl+Alt+K` | asks the coder about the editor selection |
+| `Ctrl+Alt+Shift+C` | opens the native `@coder` chat |
+| **Set Backend URL** | switch backends without opening settings — the ones you have used are offered as a list |
+| **Manage MCP Servers** | add, disable or remove a custom MCP server, from the command palette |
+| **Show MCP Log** | what each configured server said when it started |
 
-The sidebar is a companion, not the interface. It exists because a transcript
-scrolls and results should not have to be found again three turns later.
+---
+
+## Custom MCP servers
+
+`knowledgeBase.mcp.servers` takes the same shape most MCP clients use, so an
+entry copied from another client's config drops in unedited:
+
+```jsonc
+{
+  "knowledgeBase.mcp.servers": {
+    "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
+    "internal": { "url": "https://mcp.example.com/mcp" }
+  }
+}
+```
+
+A `command` server is spawned and spoken to over MCP's stdio transport; a
+`url` server over streamable HTTP. Their tools are published to the agent
+alongside the fixed ones, under `mcp_<server>_<tool>`, and **every one of them
+asks before it runs** in `manual` and `assisted` mode — a fixed tool's effects
+are known ahead of time and an arbitrary server's are not.
+
+Servers connect lazily on the first turn that needs a tool list, and stay
+connected for the life of the window. Editing the setting reconnects them; so
+does **Reload MCP Servers**. A server that fails to start says so once, with a
+button to the log, because the alternative is a model that quietly answers "I
+don't have that tool".
 
 ---
 
@@ -247,10 +238,16 @@ Point it at the **backend**, not the web app:
 
 ```jsonc
 {
-  "knowledgeBase.baseUrl": "http://localhost:8000",  // not :3001
-  "knowledgeBase.limit": 20
+  "knowledgeBase.baseUrl": "https://llmhell.borzo.ai"
 }
 ```
+
+**Set Backend URL** changes it later without going back to settings, which is
+what working against a local backend and the deployed one in the same session
+needs. `baseUrl` is read on every request, so the switch takes effect on the
+next call — but the session is dropped as it happens, because cookies are held
+without a host attached and one backend's session must not be presented to
+another.
 
 Run **Knowledge Base: Sign In** once. The password goes into the editor's
 secret storage — the OS keychain — and never into a settings file. The
@@ -306,17 +303,17 @@ session is renewed and the request retried once.
 
 | setting | default | |
 | --- | --- | --- |
-| `knowledgeBase.baseUrl` | `http://localhost:8000` | Origin of the API. A bare `localhost:8000` is accepted. |
+| `knowledgeBase.baseUrl` | `https://llmhell.borzo.ai` | Origin of the API. Point it at `http://localhost:8000` to develop against a local backend; a bare `localhost:8000` is accepted. |
 | `knowledgeBase.username` | — | Filled in by **Sign In**. |
-| `knowledgeBase.sources` | `[]` | Source keys to search. Empty means every enabled source. |
-| `knowledgeBase.limit` | `20` | Results per search, across all sources. |
-| `knowledgeBase.answer` | `true` | Applies to the sidebar search; in chat, use `/find`. |
-| `knowledgeBase.searchOnSelection` | `true` | Pre-fill from the editor. |
 | `knowledgeBase.coder.maxAgentTurns` | `30` | Maximum tool rounds for `@coder` and the chat view. |
+| `knowledgeBase.coder.mode` | `manual` | Tool approval policy. |
+| `knowledgeBase.coder.confirmTools` | `true` | Turns approval off entirely when false. |
+| `knowledgeBase.mcp.servers` | `{}` | Custom MCP servers — see above. |
 
-Needs VS Code 1.100 or newer for the chat API. Without a chat panel the
-participant is simply not registered — the sidebar, the commands and the
-keybindings still work, and `Ctrl+Alt+K` falls back to the search box.
+Needs VS Code 1.104 or newer: that is where a view container could first
+declare the Secondary Side Bar as its home. Without a chat panel the `@coder`
+participant is simply not registered — the panel, the commands and the
+keybindings still work.
 
 ---
 
@@ -333,26 +330,25 @@ pnpm watch:webview # rebuild dist/webview.js on change - run alongside watch
 
 The layering exists so the tests can run at all. `format.ts`, `http.ts`,
 `sse.ts`, `markdown.ts`, `webviewProtocol.ts`, `toolCallAggregator.ts`,
-`agentMode.ts`, `hitGroups.ts`, `diff.ts`, `highlight.ts`, `toolOutput.ts`,
-`src/webview/render.ts` and
-`client.ts`
-import nothing
-from `vscode`, so `node --test` loads them directly — 209 tests, including the
-client driven against a stub server that enforces the same cookie and CSRF
-rules as the real API, the SSE parser fed on chunk boundaries that fall in the
-wrong places, and the chat view's own Markdown renderer checked against
-prompt-injection-shaped input (`<script>`, an attribute-injection attempt
-inside a link URL, a fence whose language tag tries to close the attribute it
-lands in) with nothing standing between it and the page but that renderer's
-own escaping. `chat.ts`, `chatView.ts`, `documents.ts`, `resultsView.ts`,
-`src/webview/main.ts` and `extension.ts` do need the editor's or the browser's
-own API and are exercised by running them — the chat view's rendering is
+`agentMode.ts`, `diff.ts`, `highlight.ts`, `toolOutput.ts`, `gitlabProject.ts`,
+`mcpProtocol.ts`, `spawnCommand.ts`, `src/webview/render.ts` and `client.ts`
+import nothing from `vscode`, so `node --test` loads them directly — 241
+tests, including the client driven against a stub server that enforces the
+same cookie and CSRF rules as the real API, the SSE parser fed on chunk
+boundaries that fall in the wrong places, and the chat view's own Markdown
+renderer checked against prompt-injection-shaped input (`<script>`, an
+attribute-injection attempt inside a link URL, a fence whose language tag
+tries to close the attribute it lands in) with nothing standing between it and
+the page but that renderer's own escaping. `chatView.ts`, `documents.ts`,
+`mcp.ts`, `mcpSettings.ts`, `tools.ts`, `src/webview/main.ts` and
+`extension.ts` do need the editor's, Node's or the browser's own API and are
+exercised by running them — the chat view's rendering is
 additionally checked by loading the actual bundled `dist/webview.js` in a
 browser tab against a stand-in for VS Code's `acquireVsCodeApi`, **at a 300px
 sidebar width**, which is what caught the two bugs no string-level test could
 have: a `[hidden]` element that stayed visible because a class rule of equal
-CSS specificity beat it, and a citation list double-numbered by combining its
-own `${n}.` with an `<ol>`'s automatic one.
+CSS specificity beat it, and a list double-numbered by combining its own
+`${n}.` with an `<ol>`'s automatic one.
 
 Two consequences of that split, both deliberate: the vscode-free files declare
 and assign their fields instead of using constructor parameter properties, and

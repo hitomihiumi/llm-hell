@@ -34,7 +34,6 @@ function message(
   return {
     id: "m1",
     role: "assistant",
-    mode: "kb",
     parts: built,
     status: "done",
     ...rest,
@@ -108,109 +107,11 @@ test("a finished tool call's result is shown, escaped", () => {
   assert.ok(!html.includes("<hi> printed"));
 });
 
-test("references become clickable chips carrying their id and url", () => {
-  const html = renderMessage(
-    message({
-      references: [
-        {
-          hitId: "gitlab:code:3",
-          title: "main.go",
-          source: "gitlab",
-          url: "https://x.test/main.go",
-        },
-      ],
-    }),
-  );
-
-  assert.ok(html.includes('data-open-reference="gitlab:code:3"'));
-  assert.ok(html.includes('data-url="https://x.test/main.go"'));
-});
-
-test("a reference with no url still gets a chip, with an empty url attribute", () => {
-  /* The click handler falls back to opening it through the client instead -
-     that decision lives in main.ts, but the chip itself must not vanish. */
-  const html = renderMessage(
-    message({
-      references: [
-        { hitId: "postgres_kb:articles:4", title: "Runbook", source: "postgres_kb", url: null },
-      ],
-    }),
-  );
-
-  assert.ok(html.includes('data-open-reference="postgres_kb:articles:4"'));
-  assert.ok(html.includes('data-url=""'));
-});
-
-test("citations are numbered and linked", () => {
-  const html = renderMessage(
-    message({
-      citations: [{ n: 1, title: "README.md", url: "https://x.test/README.md", source: "gitlab" }],
-    }),
-  );
-
-  assert.ok(html.includes(">1. <"));
-  assert.ok(html.includes('href="https://x.test/README.md"'));
-});
-
-test("the citations list is a <ul>, not an <ol>", () => {
-  /* An <ol> numbers its own items, which collided with the citation's own
-     number and rendered "1. 1." for the first entry - and citation.n is not
-     always the same as an item's position anyway, since the API already
-     drops the numbers a model invented. */
-  const html = renderMessage(
-    message({ citations: [{ n: 1, title: "README.md", url: null, source: "gitlab" }] }),
-  );
-
-  assert.ok(html.includes('<ul class="citations">'));
-  assert.ok(!html.includes("<ol"));
-});
-
 test("an error is shown, escaped, without also showing an empty answer", () => {
   const html = renderMessage(message({ status: "error", text: "", error: "<no auth>" }));
 
   assert.ok(html.includes("&lt;no auth&gt;"));
   assert.ok(!html.includes("message-pending"));
-});
-
-test("a title with an embedded quote cannot break out of the chip's attribute", () => {
-  const html = renderMessage(
-    message({
-      references: [{ hitId: "x", title: 'a" onclick="evil()', source: "gitlab", url: null }],
-    }),
-  );
-
-  assert.ok(!html.includes('onclick="evil()'));
-});
-
-test("source statuses show answered, partial and unavailable states", () => {
-  const html = renderMessage(
-    message({
-      sourceStatus: [
-        {
-          source: "gitlab",
-          displayName: "GitLab",
-          ok: true,
-          degraded: false,
-          hits: 2,
-          error: null,
-        },
-        { source: "drive", displayName: "Drive", ok: true, degraded: true, hits: 1, error: null },
-        {
-          source: "kb",
-          displayName: "Knowledge base",
-          ok: false,
-          degraded: false,
-          hits: 0,
-          error: "timeout",
-        },
-      ],
-    }),
-  );
-
-  assert.ok(html.includes("source-status-answered"));
-  assert.ok(html.includes("source-status-partial"));
-  assert.ok(html.includes("source-status-unavailable"));
-  assert.ok(html.includes("timeout"));
 });
 
 // --- the approval card ---------------------------------------------------------
@@ -307,13 +208,11 @@ test("a command awaiting approval cannot break out of the card through its own t
 
 // --- welcome, actions, context -------------------------------------------------
 
-test("the welcome state suggests different things for the two modes", () => {
-  const kb = renderWelcome("kb");
-  const coder = renderWelcome("coder");
+test("the welcome state offers something to click rather than an empty box", () => {
+  const html = renderWelcome();
 
-  assert.ok(kb.includes("data-suggestion="));
-  assert.ok(coder.includes("data-suggestion="));
-  assert.notEqual(kb, coder);
+  assert.ok(html.includes("data-suggestion="));
+  assert.ok(html.includes("Coder"));
 });
 
 test("a finished answer offers copy and retry; one still streaming does not", () => {

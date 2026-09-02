@@ -11,7 +11,6 @@
 
 import type { FileDiff } from "./diff.ts";
 
-export type Mode = "kb" | "coder";
 export type AgentMode = "manual" | "assisted" | "autonomous";
 
 /**
@@ -33,18 +32,10 @@ export type MessagePart =
 export interface ChatMessageView {
   id: string;
   role: "user" | "assistant";
-  /** Which backend answered - only meaningful for an assistant message. */
-  mode: Mode;
   /** Text, reasoning and tool calls, interleaved as they arrived. */
   parts: MessagePart[];
   status: "streaming" | "done" | "error";
   error?: string;
-  /** `@kb`: the sources it read. Present once the `hits` event has arrived. */
-  references?: ReferenceView[];
-  /** Per-source outcome for the search that produced these references. */
-  sourceStatus?: SourceStatusView[];
-  /** `@kb`: the numbered citations under the answer. */
-  citations?: CitationView[];
 }
 
 /**
@@ -71,43 +62,6 @@ export function appendPart(parts: MessagePart[], kind: "text" | "reasoning", tex
   const last = parts[parts.length - 1];
   if (last?.kind === kind) last.text += text;
   else parts.push({ kind, text });
-}
-
-export interface SourceStatusView {
-  source: string;
-  displayName: string;
-  ok: boolean;
-  degraded: boolean;
-  hits: number;
-  error: string | null;
-}
-
-export interface ReferenceView {
-  title: string;
-  source: string;
-  url: string | null;
-  hitId: string;
-  /**
-   * The repository or table this came out of, straight from the backend.
-   * Absent when the hit IS the whole thing - a Drive document is not inside
-   * anything. What `hitGroups.ts` groups on.
-   */
-  container?: { id: string; title: string; kind: string } | null;
-  /** Identifies the document; `hitId` identifies one match within it. */
-  externalId?: string | null;
-}
-
-export interface CitationView {
-  n: number;
-  title: string;
-  url: string | null;
-  source: string;
-  /**
-   * Which result this citation points at. Carried so the filter can mark
-   * what the answer *actually used*, as opposed to what the search merely
-   * returned - which is the distinction the whole list is for.
-   */
-  hitId?: string;
 }
 
 export interface ToolCallView {
@@ -163,7 +117,7 @@ export interface ConversationSummary {
 
 /** Host -> webview. */
 export type HostMessage =
-  | { type: "init"; signedIn: boolean; mode: Mode; agentMode: AgentMode }
+  | { type: "init"; signedIn: boolean; agentMode: AgentMode }
   | { type: "signedIn"; value: boolean }
   | { type: "messages"; messages: ChatMessageView[] }
   | { type: "context"; items: ContextItemView[] }
@@ -173,13 +127,11 @@ export type HostMessage =
 /** Webview -> host. */
 export type WebviewMessage =
   | { type: "ready" }
-  | { type: "send"; text: string; mode: Mode }
+  | { type: "send"; text: string }
   | { type: "stop" }
-  | { type: "setMode"; mode: Mode }
   | { type: "setAgentMode"; mode: AgentMode }
   | { type: "signIn" }
   | { type: "openAccounts" }
-  | { type: "openReference"; hitId: string; url: string | null }
   | { type: "openLink"; url: string }
   | { type: "confirmTool"; id: string; allow: boolean; always?: boolean }
   | { type: "showDiff"; id: string }

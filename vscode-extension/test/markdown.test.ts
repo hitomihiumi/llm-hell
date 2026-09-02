@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  isShellLanguage,
-  linkCitationsForWebview,
-  renderAnswer,
-  renderMarkdown,
-} from "../src/markdown.ts";
+import { isShellLanguage, renderMarkdown } from "../src/markdown.ts";
 
 /**
  * The webview's own renderer, not a library's.
@@ -103,37 +98,6 @@ test("a plain link renders", () => {
   const html = renderMarkdown("See [the README](https://example.com/README.md).");
 
   assert.ok(html.includes('<a href="https://example.com/README.md">the README</a>'));
-});
-
-// --- citations -------------------------------------------------------------------
-
-test("a citation becomes a link to the result it names", () => {
-  const linked = linkCitationsForWebview("The gyro is an MPU6000 [1].", [
-    { n: 1, url: "https://gitlab.example.com/board/-/blob/main/schematic.md" },
-  ]);
-
-  assert.ok(linked.includes("[[1]](https://gitlab.example.com/board/-/blob/main/schematic.md)"));
-});
-
-test("a citation with no url is left as plain text", () => {
-  const linked = linkCitationsForWebview("See [2].", [{ n: 2, url: null }]);
-
-  assert.equal(linked, "See [2].");
-});
-
-test("renderAnswer links and renders in one call", () => {
-  const html = renderAnswer("The gyro is an MPU6000 [1].", [
-    { n: 1, url: "https://example.com/x" },
-  ]);
-
-  assert.ok(html.includes('<a href="https://example.com/x">[1]</a>'));
-});
-
-test("renderAnswer still escapes what the model wrote around a citation", () => {
-  const html = renderAnswer("<b>bold claim</b> [1].", [{ n: 1, url: "https://example.com/x" }]);
-
-  assert.ok(!/<b>bold claim<\/b>/.test(html));
-  assert.ok(html.includes("&lt;b&gt;"));
 });
 
 // --- code block actions ------------------------------------------------------------

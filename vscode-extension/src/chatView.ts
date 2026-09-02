@@ -1,23 +1,18 @@
 import * as vscode from "vscode";
 import { environmentMessage } from "./agentContext";
 import type { AgentMode } from "./agentMode";
-import { ApiError, AuthError, type ChatMessage, type KnowledgeBaseClient } from "./client";
+import { AuthError, type ChatMessage, type KnowledgeBaseClient } from "./client";
 import { diffLines } from "./diff";
-import { applyLanguage, hitUri, type KnowledgeBaseDocuments, proposalUri } from "./documents";
+import { type KnowledgeBaseDocuments, proposalUri } from "./documents";
 import { collapse } from "./format";
 import { ToolCallAggregator } from "./toolCallAggregator";
 import { truncate } from "./toolOutput";
 import { allTools, executeTool, type ToolCall } from "./tools";
-import type { SearchHit } from "./types";
 import type {
   ChatMessageView,
-  CitationView,
   ContextItemView,
   ConversationSummary,
   HostMessage,
-  Mode,
-  ReferenceView,
-  SourceStatusView,
   ToolCallView,
   WebviewMessage,
 } from "./webviewProtocol";
@@ -26,19 +21,19 @@ import { appendPart, fullToolArgs, summariseToolArgs, visibleText } from "./webv
 /**
  * The chat, as a view in the sidebar rather than a tab.
  *
- * `@kb` and `@coder` also live in VS Code's own chat panel, and that stays -
- * it needs no explaining and works the moment the extension is installed.
- * This is the surface this extension fully owns, and owning it is what buys
- * the things the native renderer cannot be asked for: a code block with
+ * `@coder` also lives in VS Code's own chat panel, and that stays - it needs
+ * no explaining and works the moment the extension is installed. This is the
+ * surface this extension fully owns, and owning it is what buys the things
+ * the native renderer cannot be asked for: a code block with
  * Copy/Insert/Create-file on it, a tool that asks permission *in the
  * transcript* instead of throwing a modal over the editor, and a composer
  * that says what context the next request will carry.
  *
- * It is a view onto the same backend the native participants use - the same
- * `/api/search/stream` and `/api/chat/completions` routes, the same tools.
- * Nothing here is a second implementation of the search or the agent loop; it
- * is a second *renderer* for the identical events, which is why
- * ToolCallAggregator lives in its own file rather than being copied.
+ * It is a view onto the same backend the native participant uses - the same
+ * `/api/chat/completions` route, the same tools. Nothing here is a second
+ * implementation of the agent loop; it is a second *renderer* for the
+ * identical events, which is why ToolCallAggregator lives in its own file
+ * rather than being copied.
  *
  * The transcript lives on the provider, not on the view. A `WebviewView` is
  * disposed and re-resolved whenever the user collapses the container or
@@ -50,8 +45,6 @@ const HISTORY_KEY = "knowledgeBase.conversations";
 const HISTORY_LIMIT = 10;
 
 export interface ChatViewSettings {
-  sources: string[];
-  limit: number;
   maxAgentTurns: number;
   agentMode: AgentMode;
 }
@@ -61,7 +54,6 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
 
   private view: vscode.WebviewView | undefined;
   private messages: ChatMessageView[] = [];
-  private mode: Mode = "kb";
   private agentMode: AgentMode = "manual";
   private abort: AbortController | undefined;
   private sequence = 0;
@@ -155,6 +147,11 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
     void this.context.workspaceState.update(HISTORY_KEY, [entry, ...saved].slice(0, HISTORY_LIMIT));
   }
 
+  /** Re-ask whether there is a session, after something outside changed the answer. */
+  async refreshSignedIn(): Promise<void> {
+    this.post({ type: "signedIn", value: await this.client.hasCredentials() });
+  }
+
   /** The editor moved; the chips above the composer should say so. */
   publishContext(): void {
     this.post({ type: "context", items: this.contextItems() });
@@ -206,19 +203,15 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
       case "ready": {
         const signedIn = await this.client.hasCredentials();
         this.agentMode = this.settings().agentMode;
-        this.post({ type: "init", signedIn, mode: this.mode, agentMode: this.agentMode });
+        this.post({ type: "init", signedIn, agentMode: this.agentMode });
         this.publish();
         this.publishContext();
         return;
       }
-      case "setMode":
-        this.mode = message.mode;
-        return;
       case "setAgentMode":
         this.agentMode = message.mode;
         return;
       case "send":
-        this.mode = message.mode;
         await this.send(message.text);
         return;
       case "stop":
@@ -230,16 +223,6 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
         return;
       case "openAccounts":
         await vscode.commands.executeCommand("knowledgeBase.accounts");
-        return;
-      case "openReference":
-        // A permalink is the fast path and the common one - Drive and
-        // GitLab hits carry one. A knowledge-base row does not, so that
-        // case opens the same read-only document `knowledgeBase.openHit`
-        // would, through the client rather than through the command: the
-        // command wants a full SearchHit, and a webview reference only ever
-        // carries the handful of fields it was rendered from.
-        if (message.url) await vscode.env.openExternal(vscode.Uri.parse(message.url));
-        else await this.openReferenceDocument(message.hitId);
         return;
       case "openLink":
         await vscode.env.openExternal(vscode.Uri.parse(message.url));
@@ -380,40 +363,6 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
     await this.send(visibleText(question));
   }
 
-  private async openReferenceDocument(hitId: string): Promise<void> {
-    const reference = findReference(this.messages, hitId);
-    try {
-      const content = await this.client.content(hitId);
-      // Only the two fields hitUri/fileName actually read - id and title -
-      // are known here, not a full SearchHit. The rest are filled with
-      // whatever a hit with nothing to say about them would have.
-      const hit: SearchHit = {
-        id: hitId,
-        source: reference?.source ?? "",
-        kind: "unknown",
-        title: content.title || reference?.title || hitId,
-        snippet: "",
-        url: reference?.url ?? null,
-        author: null,
-        timestamp: null,
-        preview_pages: content.preview_pages || null,
-        rank_in_source: 0,
-        score: 0,
-      };
-      const uri = hitUri(hit);
-      this.documents.set(uri, content.truncated ? `${content.text}\n\n[truncated]` : content.text);
-      const document = await vscode.workspace.openTextDocument(uri);
-      await applyLanguage(document, content.language);
-      await vscode.window.showTextDocument(document, { preview: true });
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 404) {
-        vscode.window.showInformationMessage("This result has nothing more to show.");
-      } else {
-        vscode.window.showErrorMessage(`Could not open that result: ${(error as Error).message}`);
-      }
-    }
-  }
-
   private nextId(): string {
     this.sequence += 1;
     return `m${this.sequence}`;
@@ -426,14 +375,12 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
     this.messages.push({
       id: this.nextId(),
       role: "user",
-      mode: this.mode,
       parts: [{ kind: "text", text: question }],
       status: "done",
     });
     const assistant: ChatMessageView = {
       id: this.nextId(),
       role: "assistant",
-      mode: this.mode,
       parts: [],
       status: "streaming",
     };
@@ -442,14 +389,13 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
 
     this.abort = new AbortController();
     try {
-      if (this.mode === "kb") await this.runSearch(question, assistant, this.abort.signal);
-      else await this.runAgent(question, assistant, this.abort.signal);
+      await this.runAgent(question, assistant, this.abort.signal);
     } catch (error) {
       if (!this.abort.signal.aborted) {
         assistant.status = "error";
         if (error instanceof AuthError) {
           assistant.error = error.message;
-          this.post({ type: "init", signedIn: false, mode: this.mode, agentMode: this.agentMode });
+          this.post({ type: "init", signedIn: false, agentMode: this.agentMode });
         } else {
           assistant.error = (error as Error).message ?? String(error);
         }
@@ -460,53 +406,6 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
       this.abort = undefined;
       if (assistant.status === "streaming") assistant.status = "done";
       this.publish();
-    }
-  }
-
-  // --- @kb: search and cite -------------------------------------------------
-
-  private async runSearch(
-    question: string,
-    assistant: ChatMessageView,
-    signal: AbortSignal,
-  ): Promise<void> {
-    const config = this.settings();
-    const history = historyFromMessages(this.messages.slice(0, -2));
-
-    for await (const event of this.client.searchStream(
-      question,
-      { sources: config.sources, limit: config.limit, answer: true, history },
-      signal,
-    )) {
-      switch (event.event) {
-        case "hits": {
-          const payload = event.data as { hits?: RawHit[]; source_status?: RawSourceStatus[] };
-          assistant.references = (payload.hits ?? []).map(toReference);
-          assistant.sourceStatus = (payload.source_status ?? []).map(toSourceStatus);
-          this.publish();
-          break;
-        }
-        case "token": {
-          const { text } = event.data as { text?: string };
-          if (text) {
-            appendPart(assistant.parts, "text", text);
-            this.publish();
-          }
-          break;
-        }
-        case "citations": {
-          const { citations } = event.data as { citations?: RawCitation[] };
-          assistant.citations = (citations ?? []).map(toCitation);
-          this.publish();
-          break;
-        }
-        case "error": {
-          const { message } = event.data as { message?: string };
-          assistant.status = "error";
-          assistant.error = message ?? "The search failed.";
-          break;
-        }
-      }
     }
   }
 
@@ -730,72 +629,6 @@ function absoluteUri(path: string): vscode.Uri {
   return folder ? vscode.Uri.joinPath(folder.uri, path) : vscode.Uri.file(path);
 }
 
-interface RawHit {
-  id: string;
-  title: string;
-  source: string;
-  url: string | null;
-  external_id?: string | null;
-  container?: { id: string; title: string; kind: string } | null;
-}
-
-interface RawSourceStatus {
-  source: string;
-  display_name?: string;
-  ok: boolean;
-  degraded: boolean;
-  hits: number;
-  error?: string | null;
-}
-
-function toSourceStatus(status: RawSourceStatus): SourceStatusView {
-  return {
-    source: status.source,
-    displayName: status.display_name || status.source,
-    ok: status.ok,
-    degraded: status.degraded,
-    hits: status.hits,
-    error: status.error ?? null,
-  };
-}
-
-interface RawCitation {
-  n: number;
-  title: string;
-  url: string | null;
-  source: string;
-  hit_id?: string;
-}
-
-function findReference(messages: ChatMessageView[], hitId: string): ReferenceView | undefined {
-  for (const message of messages) {
-    const found = message.references?.find((reference) => reference.hitId === hitId);
-    if (found) return found;
-  }
-  return undefined;
-}
-
-function toReference(hit: RawHit): ReferenceView {
-  return {
-    hitId: hit.id,
-    title: hit.title,
-    source: hit.source,
-    url: hit.url,
-    externalId: hit.external_id ?? null,
-    container: hit.container ?? null,
-  };
-}
-
-function toCitation(citation: RawCitation): CitationView {
-  return {
-    n: citation.n,
-    title: citation.title,
-    url: citation.url,
-    source: citation.source,
-    hitId: citation.hit_id,
-  };
-}
-
 /**
  * The panel's own transcript, reduced to the `{role, content}` pairs the
  * planner and the agent loop both want. Tool-call and reference detail is
@@ -862,6 +695,28 @@ const STYLES = `
   }
   #root { display: flex; flex-direction: column; height: 100vh; }
 
+  /* The webview gets the browser's scrollbars, not the editor's, and a pale
+     default bar down the side of a dark panel is the single most obviously
+     "not VS Code" thing here. These are the editor's own slider colours. */
+  * { scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--vscode-scrollbarSlider-background);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 5px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground); background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:active { background: var(--vscode-scrollbarSlider-activeBackground); background-clip: content-box; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  /* Keyboard focus has to be visible on every control here, and only for the
+     keyboard: an outline that also fires on a mouse click reads as a stuck
+     selection. */
+  :focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+  button:focus:not(:focus-visible) { outline: none; }
+
   .banner {
     display: flex;
     align-items: center;
@@ -887,11 +742,16 @@ const STYLES = `
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 12px 12px 4px;
+    padding: 14px 12px 8px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 6px;
   }
+  /* The gap is small between a question and its answer and large before the
+     next question, so a scrolled-back transcript breaks into turns at a
+     glance rather than into one even column of blocks. */
+  .message-user { margin-top: 12px; }
+  .message-user:first-child { margin-top: 0; }
 
   /* --- welcome ------------------------------------------------------------- */
   .welcome { margin: auto 0; text-align: center; padding: 8px 4px 24px; }
@@ -915,7 +775,10 @@ const STYLES = `
     background: var(--vscode-list-hoverBackground, transparent);
     border: 1px solid var(--vscode-panel-border);
   }
-  .suggestion:hover { border-color: var(--vscode-focusBorder); }
+  .suggestion:hover {
+    border-color: var(--vscode-focusBorder);
+    background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+  }
 
   /* --- messages ------------------------------------------------------------ */
   .message { max-width: 100%; min-width: 0; }
@@ -936,9 +799,10 @@ const STYLES = `
     color: var(--vscode-editor-background);
   }
   .message-role {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
     color: var(--vscode-descriptionForeground);
   }
   .message-actions { margin-left: auto; display: flex; gap: 2px; opacity: 0; transition: opacity 0.1s; }
@@ -957,10 +821,12 @@ const STYLES = `
   .message-user .message-body-plain {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    border-left: 2px solid var(--vscode-textLink-foreground);
-    padding-left: 10px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+    background: var(--vscode-input-background, var(--vscode-textCodeBlock-background));
     color: var(--vscode-foreground);
-    opacity: 0.9;
+    line-height: 1.45;
   }
   .message-body { line-height: 1.5; overflow-wrap: anywhere; }
   .message-body p { margin: 0 0 8px; }
@@ -999,7 +865,15 @@ const STYLES = `
     letter-spacing: 0.04em;
     color: var(--vscode-descriptionForeground);
   }
-  .code-block-actions { margin-left: auto; display: flex; gap: 1px; }
+  .code-block-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 1px;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+  .code-block:hover .code-block-actions,
+  .code-block-actions:focus-within { opacity: 1; }
   .code-action {
     display: inline-flex;
     padding: 4px;
@@ -1067,50 +941,6 @@ const STYLES = `
   }
   @keyframes blink { 50% { opacity: 0; } }
 
-  .source-statuses { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-  .source-status {
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 10px;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--vscode-descriptionForeground);
-  }
-  .source-status-unavailable { color: var(--vscode-errorForeground); }
-  .source-status-partial { color: var(--vscode-editorWarning-foreground); }
-  .source-status-answered { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green)); }
-
-  .references { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
-  .chip {
-    font-family: inherit;
-    font-size: 11px;
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 999px;
-    padding: 2px 10px 2px 8px;
-    background: var(--vscode-badge-background, transparent);
-    color: var(--vscode-badge-foreground, var(--vscode-editor-foreground));
-    cursor: pointer;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .chip:hover { border-color: var(--vscode-focusBorder); }
-  .chip-source {
-    text-transform: uppercase;
-    font-size: 9px;
-    letter-spacing: 0.04em;
-    opacity: 0.7;
-    margin-right: 5px;
-  }
-
-  .citations { margin: 8px 0 0; padding-left: 4px; list-style: none; font-size: 12px; color: var(--vscode-descriptionForeground); }
-  .citations a { color: var(--vscode-textLink-foreground); }
-  .citation-source { text-transform: uppercase; font-size: 9px; opacity: 0.7; }
-
   /* --- reasoning ----------------------------------------------------------- */
   .reasoning { margin: 4px 0 8px; font-size: 12px; }
   .reasoning summary {
@@ -1138,26 +968,53 @@ const STYLES = `
   }
 
   /* --- tool calls ---------------------------------------------------------- */
-  .tool-calls { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+  .tool-calls { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
+  /* A finished tool is a footnote, not a headline: an agent turn can carry a
+     dozen of them, and a dozen fully-bordered boxes reads as a wall. The
+     surface is a tint, the border appears on hover, and only a card that
+     wants something - an approval - is drawn at full strength. */
   .tool-call {
-    border: 1px solid var(--vscode-panel-border);
+    border: 1px solid transparent;
     border-radius: 6px;
+    background: var(--vscode-textCodeBlock-background);
     font-size: 12px;
     overflow: hidden;
   }
+  .tool-call:hover { border-color: var(--vscode-panel-border); }
+  .tool-call[open] { border-color: var(--vscode-panel-border); }
   .tool-call summary, .tool-call-head {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 5px 8px;
+    gap: 7px;
+    padding: 4px 8px;
     cursor: pointer;
     list-style: none;
     min-width: 0;
   }
+  .tool-call summary:hover .tool-name { color: var(--vscode-foreground); }
   .tool-call-head { cursor: default; }
   .tool-call summary::-webkit-details-marker { display: none; }
-  .tool-icon { opacity: 0.7; flex: none; }
-  .tool-name { font-family: var(--vscode-editor-font-family, monospace); font-weight: 600; flex: none; }
+  /* A caret that turns, so a card says whether it has more to show without
+     the reader having to click one to find out. */
+  .tool-call > summary::before {
+    content: "";
+    flex: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    opacity: 0.55;
+    transition: transform 0.12s ease;
+  }
+  .tool-call[open] > summary::before { transform: rotate(90deg); }
+  .tool-icon { display: none; }
+  .tool-name {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-weight: 600;
+    flex: none;
+    color: var(--vscode-descriptionForeground);
+  }
   .tool-args {
     color: var(--vscode-descriptionForeground);
     overflow: hidden;
@@ -1166,14 +1023,49 @@ const STYLES = `
     flex: 1;
     min-width: 0;
   }
-  .tool-status { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin-left: auto; flex: none; }
-  .tool-status-running .tool-status { color: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground)); }
-  .tool-status-done .tool-status { color: var(--vscode-charts-green, var(--vscode-testing-iconPassed, inherit)); }
+  .tool-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--vscode-descriptionForeground);
+    margin-left: auto;
+    flex: none;
+  }
+  .tool-status::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+  }
+  /* Done is the common case and says so quietly - the dot alone, with the
+     word dropped, because "DONE" on every card is a column of noise. */
+  .tool-status-done .tool-status {
+    color: var(--vscode-charts-green, var(--vscode-testing-iconPassed, inherit));
+    font-size: 0;
+    gap: 0;
+  }
+  .tool-status-running .tool-status { color: var(--vscode-charts-blue, var(--vscode-textLink-foreground)); }
+  .tool-status-running .tool-status::before { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.25; } }
   .tool-status-cancelled .tool-status { color: var(--vscode-errorForeground); }
+  /* The one card that wants something is the one drawn at full strength - but
+     the tint sits behind the head row only. Flooding the whole card, argument
+     and buttons included, made a question that is usually one line the
+     loudest thing in the panel. */
   .tool-status-awaiting {
     border-color: var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground));
   }
+  .tool-status-awaiting .tool-call-head {
+    background: var(--vscode-inputValidation-warningBackground, transparent);
+    border-bottom: 1px solid var(--vscode-panel-border);
+  }
   .tool-status-awaiting .tool-status { color: var(--vscode-editorWarning-foreground); }
+  .tool-status-awaiting .tool-name { color: var(--vscode-foreground); }
   .tool-approve-args {
     margin: 0;
     padding: 8px 10px;
@@ -1278,7 +1170,11 @@ const STYLES = `
   }
 
   /* --- composer ------------------------------------------------------------ */
-  .composer { padding: 6px 10px 10px; }
+  .composer {
+    padding: 8px 10px 10px;
+    border-top: 1px solid var(--vscode-panel-border);
+    background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  }
   .context-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
   .context-chip {
     display: inline-flex;
@@ -1310,7 +1206,10 @@ const STYLES = `
     background: var(--vscode-input-background);
     padding: 6px 6px 4px;
   }
-  .composer-box:focus-within { border-color: var(--vscode-focusBorder); }
+  .composer-box:focus-within {
+    border-color: var(--vscode-focusBorder);
+    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+  }
   #input {
     width: 100%;
     display: block;
@@ -1356,6 +1255,9 @@ const STYLES = `
   .icon-button-send {
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
+    border-radius: 5px;
+    width: 26px;
+    height: 24px;
   }
   .icon-button-send:hover { background: var(--vscode-button-hoverBackground); color: var(--vscode-button-foreground); }
   .icon-button-stop { color: var(--vscode-errorForeground); }

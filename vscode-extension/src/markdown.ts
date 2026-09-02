@@ -301,34 +301,3 @@ function inline(text: string): string {
     (_match, index: string) => spans[Number(index)] ?? "",
   );
 }
-
-/**
- * `[1]` -> a link to the citation it names, the same rule `format.ts` applies
- * to the answer document. Run before `renderMarkdown` sees the text, because
- * afterward the numbers are inside already-escaped HTML and a citation whose
- * label happened to contain a bracket would be at risk of double-processing.
- */
-export function linkCitationsForWebview(
-  text: string,
-  citations: ReadonlyArray<{ n: number; url: string | null }>,
-): string {
-  const byNumber = new Map(citations.map((citation) => [citation.n, citation]));
-  return text.replace(/\[(\d+)\]/g, (whole, digits: string) => {
-    const citation = byNumber.get(Number(digits));
-    return citation?.url ? `[${whole}](${citation.url})` : whole;
-  });
-}
-
-/**
- * The one call the webview actually makes: citations linked, then rendered.
- * Order matters - citation linking has to run on the raw text, before
- * escaping turns `[1]` into something the link pattern no longer recognises
- * as bracketed at all in some edge case, and before a code fence's own
- * bracket-shaped contents could be mistaken for a citation.
- */
-export function renderAnswer(
-  text: string,
-  citations: ReadonlyArray<{ n: number; url: string | null }>,
-): string {
-  return renderMarkdown(linkCitationsForWebview(text, citations));
-}

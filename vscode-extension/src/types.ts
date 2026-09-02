@@ -94,15 +94,7 @@ export interface Content {
   preview_pages: number;
 }
 
-export interface Source {
-  key: string;
-  kind: string;
-  display_name: string;
-  enabled: boolean;
-  weight: number;
-}
-
-/** One prior exchange, as `/api/search` and `/api/search/stream` want it. */
+/** One prior exchange, as `/api/chat/completions` wants it. */
 export interface ChatTurn {
   role: "user" | "assistant";
   content: string;

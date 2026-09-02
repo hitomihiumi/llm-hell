@@ -90,8 +90,8 @@ before(async () => {
       response.end();
       return;
     }
-    if (path === "/api/sources") {
-      send(200, [{ key: "gitlab", display_name: "GitLab", enabled: true }]);
+    if (path === "/api/credentials") {
+      send(200, [{ provider: "gitlab", connected: true }]);
       return;
     }
     if (path === "/api/content/gitlab%3Acode%3A3") {
@@ -163,9 +163,9 @@ test("a GET is not given a CSRF header, which the API does not want", async () =
   fresh();
   const kb = client(PASSWORD);
 
-  await kb.sources();
+  await kb.credentials();
 
-  const sources = seen.find((request) => request.path === "/api/sources");
+  const sources = seen.find((request) => request.path === "/api/credentials");
   assert.equal(sources?.csrf, "");
 });
 
@@ -193,11 +193,11 @@ test("a stored password signs in on the first request, with nothing asked", asyn
   fresh();
   const kb = client(PASSWORD);
 
-  await kb.sources();
+  await kb.credentials();
 
   assert.deepEqual(
     seen.map((request) => request.path),
-    ["/api/auth/login", "/api/sources"],
+    ["/api/auth/login", "/api/credentials"],
   );
 });
 
@@ -207,7 +207,7 @@ test("an expired session is renewed and the request retried once", async () => {
      to fix that itself. */
   fresh();
   const kb = client(PASSWORD);
-  await kb.sources();
+  await kb.credentials();
 
   sessionsValid = false;
   seen = [];
@@ -223,7 +223,7 @@ test("no stored password is an auth error, not a crash", async () => {
   fresh();
   const kb = client();
 
-  await assert.rejects(() => kb.sources(), AuthError);
+  await assert.rejects(() => kb.credentials(), AuthError);
 });
 
 test("content(id) fetches by a bare id, colon and all", async () => {
@@ -258,7 +258,7 @@ test("an unreachable backend names the address rather than the stack", async () 
     username: USERNAME,
   }));
 
-  await assert.rejects(() => kb.sources(), /Could not reach http:\/\/127\.0\.0\.1:1/);
+  await assert.rejects(() => kb.credentials(), /Could not reach http:\/\/127\.0\.0\.1:1/);
 });
 
 test("a stored password counts as signed in across a restart", async () => {

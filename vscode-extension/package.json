@@ -1,7 +1,7 @@
 {
   "name": "llmhell-knowledge-base",
-  "displayName": "Knowledge Base (federated search)",
-  "description": "Search Google Workspace, GitLab and the internal knowledge base from the editor, with cited answers.",
+  "displayName": "Coder (knowledge-base backed)",
+  "description": "A coding agent in the editor, backed by the team's knowledge base and your own MCP servers.",
   "version": "0.1.0",
   "private": true,
   "publisher": "llmhell",
@@ -22,38 +22,13 @@
       "properties": {
         "knowledgeBase.baseUrl": {
           "type": "string",
-          "default": "http://localhost:8000",
-          "markdownDescription": "Origin of the knowledge-base API. The backend, not the web app \u2014 `http://localhost:8000`, not `:3001`."
+          "default": "https://llmhell.borzo.ai",
+          "markdownDescription": "Origin of the knowledge-base API. The backend, not the web app — point this at a local backend (`http://localhost:8000`) to develop against one."
         },
         "knowledgeBase.username": {
           "type": "string",
           "default": "",
           "description": "Account to sign in as. The password is never stored here; run \"Knowledge Base: Sign In\" and it goes into the editor's secret storage."
-        },
-        "knowledgeBase.sources": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "markdownDescription": "Source keys to search, e.g. `[\"gitlab\", \"google_drive\"]`. Empty means every enabled source. Also settable per window with \"Knowledge Base: Choose Sources\"."
-        },
-        "knowledgeBase.limit": {
-          "type": "number",
-          "default": 20,
-          "minimum": 1,
-          "maximum": 100,
-          "description": "How many results one search may return, across all sources."
-        },
-        "knowledgeBase.answer": {
-          "type": "boolean",
-          "default": true,
-          "description": "Ask the model for a cited answer as well as the result list. Turning this off makes a search fast and costs no tokens."
-        },
-        "knowledgeBase.searchOnSelection": {
-          "type": "boolean",
-          "default": true,
-          "description": "Pre-fill the search box with the editor selection, or with the symbol under the cursor when nothing is selected."
         },
         "knowledgeBase.coder.confirmTools": {
           "type": "boolean",
@@ -140,24 +115,14 @@
           "name": "Chat",
           "type": "webview",
           "icon": "media/icon.svg"
-        },
-        {
-          "id": "knowledgeBase.results",
-          "name": "Results",
-          "icon": "media/icon.svg"
         }
       ]
     },
     "viewsWelcome": [
       {
-        "view": "knowledgeBase.results",
+        "view": "knowledgeBase.chat",
         "when": "!knowledgeBase.signedIn",
-        "contents": "Searching needs an account on the backend.\n[Sign in](command:knowledgeBase.signIn)\n\nPoint `knowledgeBase.baseUrl` at the API \u2014 the backend on :8000, not the web app on :3001.\n[Open settings](command:workbench.action.openSettings?%22knowledgeBase%22)"
-      },
-      {
-        "view": "knowledgeBase.results",
-        "when": "knowledgeBase.signedIn",
-        "contents": "Ask in the chat panel with **@kb**, and the results land here.\n[Open chat](command:knowledgeBase.openChat)\n\nSearching your own Drive and GitLab needs your accounts connected.\n[Connect accounts](command:knowledgeBase.accounts)\n\nOr search without a conversation:\n[Search](command:knowledgeBase.search)"
+        "contents": "The coder needs an account on the backend.\n[Sign in](command:knowledgeBase.signIn)\n\n[Open settings](command:workbench.action.openSettings?%22knowledgeBase%22)"
       }
     ],
     "commands": [
@@ -180,27 +145,10 @@
         "icon": "$(history)"
       },
       {
-        "command": "knowledgeBase.openChat",
-        "title": "Ask in Chat",
-        "category": "Knowledge Base",
-        "icon": "$(comment-discussion)"
-      },
-      {
         "command": "knowledgeBase.openCoderChat",
         "title": "Ask Coder",
         "category": "Knowledge Base",
         "icon": "$(code)"
-      },
-      {
-        "command": "knowledgeBase.search",
-        "title": "Search",
-        "category": "Knowledge Base",
-        "icon": "$(search)"
-      },
-      {
-        "command": "knowledgeBase.searchSelection",
-        "title": "Search for Selection",
-        "category": "Knowledge Base"
       },
       {
         "command": "knowledgeBase.signIn",
@@ -210,35 +158,6 @@
       {
         "command": "knowledgeBase.signOut",
         "title": "Sign Out",
-        "category": "Knowledge Base"
-      },
-      {
-        "command": "knowledgeBase.chooseSources",
-        "title": "Choose Sources",
-        "category": "Knowledge Base",
-        "icon": "$(filter)"
-      },
-      {
-        "command": "knowledgeBase.showAnswer",
-        "title": "Show Last Answer",
-        "category": "Knowledge Base",
-        "icon": "$(comment-discussion)"
-      },
-      {
-        "command": "knowledgeBase.refresh",
-        "title": "Run the Last Search Again",
-        "category": "Knowledge Base",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "knowledgeBase.openExternal",
-        "title": "Open in Browser",
-        "category": "Knowledge Base",
-        "icon": "$(link-external)"
-      },
-      {
-        "command": "knowledgeBase.copyLink",
-        "title": "Copy Link",
         "category": "Knowledge Base"
       },
       {
@@ -262,6 +181,17 @@
         "command": "knowledgeBase.mcp.showLog",
         "title": "Show MCP Log",
         "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.askSelection",
+        "title": "Ask the Coder about the Selection",
+        "category": "Knowledge Base"
+      },
+      {
+        "command": "knowledgeBase.setBackendUrl",
+        "title": "Set Backend URL",
+        "category": "Knowledge Base",
+        "icon": "$(server-environment)"
       }
     ],
     "menus": {
@@ -287,97 +217,33 @@
           "group": "navigation@3"
         },
         {
-          "command": "knowledgeBase.openChat",
-          "when": "view == knowledgeBase.results",
-          "group": "navigation@0"
-        },
-        {
-          "command": "knowledgeBase.search",
-          "when": "view == knowledgeBase.results",
-          "group": "navigation@1"
-        },
-        {
-          "command": "knowledgeBase.showAnswer",
-          "when": "view == knowledgeBase.results",
-          "group": "navigation@2"
-        },
-        {
-          "command": "knowledgeBase.chooseSources",
-          "when": "view == knowledgeBase.results",
-          "group": "navigation@3"
-        },
-        {
-          "command": "knowledgeBase.refresh",
-          "when": "view == knowledgeBase.results",
+          "command": "knowledgeBase.setBackendUrl",
+          "when": "view == knowledgeBase.chat",
           "group": "navigation@4"
-        },
-        {
-          "command": "knowledgeBase.accounts",
-          "when": "view == knowledgeBase.results",
-          "group": "navigation@5"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "knowledgeBase.openExternal",
-          "when": "view == knowledgeBase.results && viewItem == hit.linked",
-          "group": "inline"
-        },
-        {
-          "command": "knowledgeBase.copyLink",
-          "when": "view == knowledgeBase.results && viewItem == hit.linked"
         }
       ],
       "editor/context": [
         {
-          "command": "knowledgeBase.searchSelection",
+          "command": "knowledgeBase.askSelection",
           "when": "editorHasSelection",
           "group": "navigation@9"
-        }
-      ],
-      "commandPalette": [
-        {
-          "command": "knowledgeBase.openExternal",
-          "when": "false"
-        },
-        {
-          "command": "knowledgeBase.copyLink",
-          "when": "false"
         }
       ]
     },
     "keybindings": [
       {
-        "command": "knowledgeBase.searchSelection",
-        "key": "ctrl+alt+k",
-        "mac": "cmd+alt+k",
-        "when": "editorTextFocus"
-      },
-      {
-        "command": "knowledgeBase.openChat",
-        "key": "ctrl+alt+shift+k",
-        "mac": "cmd+alt+shift+k"
-      },
-      {
         "command": "knowledgeBase.openCoderChat",
         "key": "ctrl+alt+shift+c",
         "mac": "cmd+alt+shift+c"
+      },
+      {
+        "command": "knowledgeBase.askSelection",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus"
       }
     ],
     "chatParticipants": [
-      {
-        "id": "knowledgeBase.chat",
-        "name": "kb",
-        "fullName": "Knowledge Base",
-        "description": "Ask across Google Workspace, GitLab and the knowledge base",
-        "isSticky": true,
-        "commands": [
-          {
-            "name": "find",
-            "description": "Results only - no answer, no tokens spent"
-          }
-        ]
-      },
       {
         "id": "knowledgeBase.coder",
         "name": "coder",
