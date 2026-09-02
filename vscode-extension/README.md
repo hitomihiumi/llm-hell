@@ -98,8 +98,8 @@ The loop stops after `knowledgeBase.coder.maxAgentTurns` rounds of tool calls
 
 `@kb` and `@coder` also live in VS Code's own chat panel, and that stays — it
 needs no explaining and works the moment the extension is installed. The
-**Knowledge Base** container in the Activity Bar holds the other thing: a chat
-this extension fully owns, built from scratch rather than borrowed from the
+**Knowledge Base** container in the Secondary Side Bar holds the other thing: a
+chat this extension fully owns, built from scratch rather than borrowed from the
 native chat renderer, with **Results** underneath it.
 
 It is a second *renderer* for the identical backend events, not a second

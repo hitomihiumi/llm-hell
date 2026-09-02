@@ -41,6 +41,76 @@ const HEADING = /^(#{1,4})\s+(.+)$/;
 const BULLET = /^[-*]\s+(.+)$/;
 
 /**
+ * One row's cells, with the optional outer pipes dropped.
+ *
+ * `\|` is a literal pipe in GFM rather than a cell boundary, so the split
+ * skips it and then unescapes it. `escapeHtml` has already run over the
+ * source by this point and leaves backslashes alone, so it is still here to
+ * be read.
+ */
+function splitRow(line: string): string[] {
+  const inner = line.trim().replace(/^[|]/, "").replace(/[|]$/, "");
+  return inner.split(/(?<!\\)[|]/).map((cell) => cell.replace(/\\[|]/g, "|").trim());
+}
+
+/**
+ * The alignments a delimiter row declares - `|---|:---:|---:|` - or nothing
+ * at all when the line is not a delimiter row.
+ *
+ * Returning `undefined` is what tells the caller the line above was never a
+ * table header, which is the whole test: a paragraph mentioning `a | b` has
+ * no such row under it and stays a paragraph.
+ */
+function tableAlignments(line: string): Array<"left" | "center" | "right" | null> | undefined {
+  if (!line.includes("|") && !line.includes("-")) return undefined;
+  const cells = splitRow(line);
+  if (!cells.length) return undefined;
+  const alignments: Array<"left" | "center" | "right" | null> = [];
+  for (const cell of cells) {
+    if (!/^:?-+:?$/.test(cell)) return undefined;
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    alignments.push(left && right ? "center" : right ? "right" : left ? "left" : null);
+  }
+  return alignments;
+}
+
+function alignAttribute(alignment: "left" | "center" | "right" | null | undefined): string {
+  return alignment ? ` style="text-align:${alignment}"` : "";
+}
+
+/**
+ * A GFM table.
+ *
+ * The header decides the width: a short row is padded with empty cells and a
+ * long one is cut, which is what GFM says and, more to the point, keeps the
+ * columns lined up under their headings when a model miscounts pipes.
+ */
+function renderTable(
+  header: string,
+  alignments: Array<"left" | "center" | "right" | null>,
+  rows: string[],
+): string {
+  const headings = splitRow(header);
+  const head = headings
+    .map((cell, column) => `<th${alignAttribute(alignments[column])}>${inline(cell)}</th>`)
+    .join("");
+  const body = rows
+    .map((row) => {
+      const cells = splitRow(row);
+      const tds = headings
+        .map(
+          (_, column) =>
+            `<td${alignAttribute(alignments[column])}>${inline(cells[column] ?? "")}</td>`,
+        )
+        .join("");
+      return `<tr>${tds}</tr>`;
+    })
+    .join("");
+  return `<div class="md-table-wrap"><table class="md-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+/**
  * Turn Markdown into HTML fragments, safe to set as a message's innerHTML.
  *
  * Line-oriented rather than a real parser: paragraphs are blank-line
@@ -80,8 +150,8 @@ export function renderMarkdown(source: string): string {
     }
   };
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index].trim();
 
     const codePlaceholder = /^CODEBLOCK_PLACEHOLDER_(\d+)$/.exec(line);
     if (codePlaceholder) {
@@ -104,6 +174,28 @@ export function renderMarkdown(source: string): string {
       flushList();
       const level = heading[1].length;
       html.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    // A table is the one construct here that needs to see the next line
+    // before it can commit: `| a | b |` is only a header if a delimiter row
+    // follows it, and is otherwise an ordinary paragraph that happens to
+    // contain pipes. Looking ahead is why this loop is indexed.
+    const alignments =
+      line.includes("|") && index + 1 < lines.length
+        ? tableAlignments(lines[index + 1].trim())
+        : undefined;
+    if (alignments) {
+      flushParagraph();
+      flushList();
+      const rows: string[] = [];
+      let next = index + 2;
+      while (next < lines.length && lines[next].trim().includes("|")) {
+        rows.push(lines[next].trim());
+        next++;
+      }
+      html.push(renderTable(line, alignments, rows));
+      index = next - 1;
       continue;
     }
 

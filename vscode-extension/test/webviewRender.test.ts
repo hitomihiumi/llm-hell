@@ -636,6 +636,89 @@ test("a tool with no diff still shows its argument", () => {
   assert.ok(html.includes("pnpm test"));
 });
 
+test("an awaiting tool's argument box carries a scroll key", () => {
+  /* Without one, a long `run_terminal` command loses its scroll position
+     the moment another token in the same turn triggers a re-render - the
+     whole reason `.tool-result` and `.diff-body` carry one already. */
+  const html = renderMessage(
+    message({
+      toolCalls: [
+        {
+          id: "c1",
+          name: "run_terminal",
+          argsSummary: "pnpm test",
+          argsFull: "pnpm test",
+          status: "awaiting",
+        },
+      ],
+    }),
+  );
+
+  assert.ok(html.includes('data-scroll-key="args:c1"'));
+});
+
+test("read_file's result is syntax-highlighted from its own path", () => {
+  /* The result is exactly what an editor tab would show for a.ts - plain
+     text was the one tool that gave back real file content and dropped it
+     on the floor. */
+  const html = renderMessage(
+    message({
+      toolCalls: [
+        {
+          id: "c1",
+          name: "read_file",
+          argsSummary: "a.ts",
+          status: "done",
+          result: "const x = 1;",
+        },
+      ],
+    }),
+  );
+
+  assert.ok(html.includes("hl-keyword"));
+  assert.ok(html.replace(/<[^>]*>/g, "").includes("const x = 1;"));
+});
+
+test("a read_file error is left plain, not run through the lexer", () => {
+  const html = renderMessage(
+    message({
+      toolCalls: [
+        {
+          id: "c1",
+          name: "read_file",
+          argsSummary: "missing.ts",
+          status: "done",
+          result: "Error reading file: ENOENT",
+        },
+      ],
+    }),
+  );
+
+  assert.ok(html.includes("Error reading file: ENOENT"));
+  assert.ok(!html.includes("hl-"));
+});
+
+test("other tools' results are not run through the highlighter", () => {
+  /* list_directory's output is a listing, not a file's content - it has no
+     language to pick, and running it through the lexer anyway would colour
+     directory names as though they were code. */
+  const html = renderMessage(
+    message({
+      toolCalls: [
+        {
+          id: "c1",
+          name: "list_directory",
+          argsSummary: "src",
+          status: "done",
+          result: "index.ts (file)\nutils.ts (file)",
+        },
+      ],
+    }),
+  );
+
+  assert.ok(!html.includes("hl-"));
+});
+
 test("a write that changed nothing says so rather than showing an empty box", () => {
   const html = renderMessage(
     message({

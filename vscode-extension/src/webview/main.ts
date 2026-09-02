@@ -138,6 +138,29 @@ function restoreOpenAndScroll(): void {
   }
 }
 
+/**
+ * Open or shut one card, now, rather than letting the browser do it later.
+ *
+ * `<details>` toggles as the *default action of a click*, and a click needs
+ * its element to survive from mousedown to mouseup. During streaming it does
+ * not: a token lands in between, the whole transcript is replaced, and the
+ * node under the cursor no longer exists - so the browser has nothing to
+ * dispatch the click to and the card never moves. Which is exactly when
+ * somebody wants to open one.
+ *
+ * So the toggle is done on `mousedown` instead - a single event, with no
+ * second half to lose - and written to both the element and `openState`, the
+ * two places the next render reads.
+ */
+function toggleCard(summary: HTMLElement): void {
+  const details = summary.closest<HTMLDetailsElement>("[data-toggle-key]");
+  const key = details?.dataset.toggleKey;
+  if (!details || !key) return;
+  const next = !details.open;
+  details.open = next;
+  openState.set(key, next);
+}
+
 function renderMessages(): void {
   if (!messages.length) {
     messagesEl.innerHTML = renderWelcome(mode);
@@ -321,6 +344,32 @@ contextChipsEl.addEventListener("click", (event) => {
 // One delegated listener rather than one per message: the list is replaced
 // wholesale on every render, and re-attaching a listener per chip per render
 // would leak exactly as many as the transcript is long.
+
+// Before the click that would never arrive.
+messagesEl.addEventListener("mousedown", (event) => {
+  const summary = (event.target as HTMLElement).closest<HTMLElement>("summary");
+  if (!summary) return;
+  toggleCard(summary);
+});
+
+// And the click itself, whether or not it arrives.
+//
+// `<details>` toggles as the default action of **click**, not of mousedown -
+// so cancelling it has to happen here. Cancelling the mousedown instead left
+// the native toggle to run whenever the node did survive to be clicked (any
+// pause between tokens, or after the answer finished), undoing the one above
+// and shutting the card the instant it opened.
+//
+// A keyboard activation - Enter or Space on a focused summary - arrives as a
+// click with no pointer behind it and no mousedown before it, so that is the
+// one case this still has to do the toggling for.
+messagesEl.addEventListener("click", (event) => {
+  const summary = (event.target as HTMLElement).closest<HTMLElement>("summary");
+  if (!summary) return;
+  event.preventDefault();
+  if (event.detail !== 0) return;
+  toggleCard(summary);
+});
 
 messagesEl.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;

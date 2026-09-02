@@ -335,6 +335,7 @@ vscode-extension/
   src/http.ts          cookies and base URLs - pure, same reason
   src/client.ts        signs in the way the web app does; no server change needed
 tools/mcp_probe.py     standalone MCP prober
+tools/webstrike.py     HTTP/API assault verbs: fingerprint, enumerate, auth, fuzz
 docs/                  spike findings, Google runbook, per-user credentials, proxy notes
 ```
 

@@ -210,6 +210,7 @@ export function summariseToolArgs(name: string, argsJson: string): string {
     case "run_terminal":
       return truncateOneLine(String(args.command ?? ""), 100);
     case "search_knowledge_base":
+    case "search_gitlab_project":
       return String(args.query ?? "");
     case "read_knowledge_base_result":
       return String(args.id ?? "");
