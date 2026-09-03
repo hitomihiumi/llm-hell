@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { environmentMessage } from "./agentContext";
 import type { AgentMode } from "./agentMode";
 import { AuthError, type ChatMessage, type KnowledgeBaseClient } from "./client";
+import { breakdown, compact } from "./compaction";
 import { diffLines } from "./diff";
 import { type KnowledgeBaseDocuments, proposalUri } from "./documents";
 import { collapse } from "./format";
@@ -11,6 +12,7 @@ import { allTools, executeTool, type ToolCall } from "./tools";
 import type {
   ChatMessageView,
   ContextItemView,
+  ContextUsageView,
   ConversationSummary,
   HostMessage,
   ToolCallView,
@@ -47,6 +49,8 @@ const HISTORY_LIMIT = 10;
 export interface ChatViewSettings {
   maxAgentTurns: number;
   agentMode: AgentMode;
+  /** The model's context window, in tokens. Zero turns compaction off. */
+  contextTokens: number;
 }
 
 export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider {
@@ -147,6 +151,44 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
     void this.context.workspaceState.update(HISTORY_KEY, [entry, ...saved].slice(0, HISTORY_LIMIT));
   }
 
+  private publishUsage(
+    messages: ChatMessage[],
+    tools: unknown[],
+    compacted?: ContextUsageView["compacted"],
+  ): void {
+    this.post({
+      type: "usage",
+      usage: {
+        used: breakdown(messages, tools).reduce((total, row) => total + row.tokens, 0),
+        budget: this.settings().contextTokens,
+        compacted,
+        categories: breakdown(messages, tools),
+      },
+    });
+  }
+
+  /**
+   * What the next request would cost, before there is a turn to measure.
+   *
+   * The ring is shown from the moment the panel opens rather than appearing
+   * once a conversation starts, because "how much room is left" is a question
+   * people ask before typing, not after. The floor is never zero: the
+   * environment block and the tool schemas are sent with the very first
+   * message.
+   */
+  async publishUsageSnapshot(): Promise<void> {
+    const messages: ChatMessage[] = [environmentMessage()];
+    const attached = await this.attachedContext();
+    if (attached) messages.push(attached);
+    messages.push(
+      ...historyFromMessages(this.messages).map((turn) => ({
+        role: turn.role,
+        content: turn.content,
+      })),
+    );
+    this.publishUsage(messages, await allTools());
+  }
+
   /** Re-ask whether there is a session, after something outside changed the answer. */
   async refreshSignedIn(): Promise<void> {
     this.post({ type: "signedIn", value: await this.client.hasCredentials() });
@@ -155,6 +197,9 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
   /** The editor moved; the chips above the composer should say so. */
   publishContext(): void {
     this.post({ type: "context", items: this.contextItems() });
+    // Pinning a file changes what the next request costs, and the ring is
+    // the only thing that says by how much.
+    void this.publishUsageSnapshot();
   }
 
   private contextItems(): ContextItemView[] {
@@ -206,6 +251,7 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
         this.post({ type: "init", signedIn, agentMode: this.agentMode });
         this.publish();
         this.publishContext();
+        void this.publishUsageSnapshot();
         return;
       }
       case "setAgentMode":
@@ -481,13 +527,37 @@ export class KnowledgeBaseChatViewProvider implements vscode.WebviewViewProvider
     for (let turn = 0; turn < turnLimit; turn++) {
       if (signal.aborted) return;
 
+      // Before the request, not after it fails: a turn that overflows dies at
+      // whatever point it happens to reach, and the work already done in it
+      // dies with it.
+      const tools = await allTools();
+      const budget = this.settings().contextTokens;
+      const compaction = compact(messages, budget);
+      if (compaction.freed > 0) {
+        messages.length = 0;
+        messages.push(...(compaction.messages as ChatMessage[]));
+        appendPart(
+          assistant.parts,
+          "text",
+          `
+
+_Context was compacted: ${describeCompaction(compaction)}._
+
+`,
+        );
+        this.publish();
+      }
+      this.publishUsage(
+        messages,
+        tools,
+        compaction.freed > 0
+          ? { folded: compaction.folded, dropped: compaction.dropped }
+          : undefined,
+      );
+
       const aggregator = new ToolCallAggregator();
       let content = "";
-      for await (const event of this.client.chatCompletionsStream(
-        messages,
-        signal,
-        await allTools(),
-      )) {
+      for await (const event of this.client.chatCompletionsStream(messages, signal, tools)) {
         if (signal.aborted) return;
         const chunk = event.data as {
           choices?: Array<{
@@ -635,6 +705,14 @@ function absoluteUri(path: string): vscode.Uri {
  * for this panel's own rendering and was never part of what either backend
  * call reads back.
  */
+/** What compaction did, for the line the transcript shows about it. */
+function describeCompaction(result: { folded: number; dropped: number }): string {
+  const parts: string[] = [];
+  if (result.folded) parts.push(`${result.folded} earlier tool result(s) folded away`);
+  if (result.dropped) parts.push(`${result.dropped} earlier message(s) dropped`);
+  return parts.join(", ") || "nothing changed";
+}
+
 function historyFromMessages(
   messages: ChatMessageView[],
 ): { role: "user" | "assistant"; content: string }[] {
@@ -1201,6 +1279,8 @@ const STYLES = `
   .context-remove:hover { color: var(--vscode-errorForeground); }
 
   .composer-box {
+    /* What the usage tooltip is positioned against - see .usage-tip below. */
+    position: relative;
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
     border-radius: 8px;
     background: var(--vscode-input-background);
@@ -1238,6 +1318,130 @@ const STYLES = `
     padding: 2px 4px;
     max-width: 120px;
   }
+  /* How full the context is. Muted until it matters, because a gauge that is
+     always coloured is a gauge nobody reads. */
+  .usage-slot { display: inline-flex; align-items: center; }
+  .usage { display: inline-flex; align-items: center; padding: 0 2px; cursor: help; }
+  .usage-track { stroke: var(--vscode-panel-border); }
+  .usage-fill { stroke: var(--vscode-descriptionForeground); transition: stroke-dasharray 0.2s; }
+  .usage-high .usage-fill { stroke: var(--vscode-editorWarning-foreground); }
+  .usage-full .usage-fill { stroke: var(--vscode-errorForeground); }
+
+  /* Drawn rather than left to the browser's own title tooltip, which waits
+     a second before appearing, is styled by the operating system rather
+     than by the theme, and breaks its lines differently on every platform.
+     Hover and focus both, so it is not mouse-only.
+
+     Anchored to the ring's left edge and upward, because the composer sits at
+     the bottom of a panel that is often 300px wide: opening downward would go
+     off the window, and right-aligning would go off the panel. */
+  .usage-tip {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    /* Anchored to the composer rather than to the ring, and spanning it.
+       Anchoring to the ring looked right at any comfortable width and put the
+       tooltip through the right-hand edge in a 300px sidebar, which is the
+       width this panel actually gets. Spanning a box that is already the
+       width of the panel cannot overflow it at any width. */
+    left: 4px;
+    right: 4px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border));
+    border-radius: 4px;
+    background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+    color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+    box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+    font-size: 11px;
+    line-height: 1.45;
+    /* Not interactive: the pointer must be able to travel over it without the
+       tooltip catching the click meant for what is underneath. */
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 0.08s ease, transform 0.08s ease;
+  }
+  .usage:hover .usage-tip,
+  .usage:focus-visible .usage-tip {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .usage-off .usage-fill { stroke: none; }
+
+  /* The breakdown, on click. Same anchor as the tooltip - the composer, not
+     the ring - for the same reason: it must not leave a 300px panel. */
+  .usage-details {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 4px;
+    right: 4px;
+    z-index: 6;
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 9px;
+    border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border));
+    border-radius: 4px;
+    background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+    color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+    box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+    font-size: 11px;
+    cursor: default;
+  }
+  .usage-open .usage-details { display: flex; }
+  /* One or the other, never both: the tooltip explains the ring, and the
+     breakdown replaces that explanation with the detail. */
+  .usage-open .usage-tip { display: none; }
+  .usage-details-head {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--vscode-descriptionForeground);
+  }
+  .usage-row { display: flex; align-items: center; gap: 6px; }
+  .usage-row-name {
+    flex: none;
+    width: 92px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .usage-row-bar {
+    flex: 1;
+    min-width: 0;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--vscode-panel-border);
+    overflow: hidden;
+  }
+  .usage-row-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--vscode-descriptionForeground);
+  }
+  .usage-row-tokens {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-descriptionForeground);
+  }
+  .usage-row-empty { color: var(--vscode-descriptionForeground); }
+  .usage-details-total {
+    margin-top: 2px;
+    padding-top: 4px;
+    border-top: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .usage-tip-head { font-size: 12px; color: var(--vscode-foreground); }
+  .usage-tip-line { color: var(--vscode-foreground); }
+  .usage-tip-note { color: var(--vscode-descriptionForeground); }
+  .usage-tip-hint { opacity: 0.75; }
+  .usage-high .usage-tip-head b { color: var(--vscode-editorWarning-foreground); }
+  .usage-full .usage-tip-head b { color: var(--vscode-errorForeground); }
+
   .icon-button {
     display: inline-flex;
     align-items: center;

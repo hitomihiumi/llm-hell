@@ -58,6 +58,45 @@ before approval is even considered. Turn confirmation off entirely with
 The loop stops after `knowledgeBase.coder.maxAgentTurns` rounds of tool calls
 (30 by default) and says so, rather than going quiet mid-task.
 
+### Staying inside the context window
+
+A coding turn does not grow gently: one `read_file` returns up to 24 000
+characters, and a loop that reads four files and runs a build has spent more
+of the window on tool output than on everything else together. Left alone the
+turn eventually sends a request the model refuses — and dies at whatever point
+that happens, taking the work already done in it.
+
+So before every request the conversation is compacted, in that order:
+
+1. **Old tool results become stubs.** The model has already read them and
+   written its conclusions into its own text; the raw output is the part it no
+   longer needs, and it is where nearly all the space is.
+2. **Then the oldest messages go**, replaced by one line saying how many.
+
+The leading system messages — the environment, and any files attached to the
+question — and the most recent exchanges are never touched. When a pass folds
+anything, the transcript says so rather than quietly forgetting.
+
+The ring in the composer is always there — a gauge that appears only once it
+matters is one nobody trusts — and shows how full the window is: muted, then
+amber past 70%, then red past 90%. **Clicking it** breaks the total down by
+what is consuming it, largest first: tool results, the tool schemas (sent in
+full on every request, and a reason to switch an MCP server off), the
+conversation, attached files, the environment block. Each row is something
+that can be acted on. Its tooltip is drawn rather than left to the browser's
+`title` — a native one waits a second before appearing, is styled by the
+operating system rather than by the theme, and breaks its lines differently on
+every platform. It is CSS only, opens on hover *and* on keyboard focus, and is
+anchored to the composer rather than to the ring: anchored to the ring it
+looked right at any comfortable width and went through the right-hand edge in
+a 300px sidebar, which is the width this panel actually gets. Both it and the
+compaction work from `knowledgeBase.coder.contextTokens`, which has to match
+the window of whatever `AGENT_MODEL_ID` points at — the extension cannot ask
+the backend for it. The count is an **estimate** and the tooltip says so: a
+real tokenizer would be a model-specific dependency, and "is this close to too
+big" does not need the exact number. Set it to `0` to switch compaction off
+and hide the ring.
+
 ---
 
 ## The chat in the sidebar
@@ -249,6 +288,25 @@ next call — but the session is dropped as it happens, because cookies are held
 without a host attached and one backend's session must not be presented to
 another.
 
+### Signing in, or not
+
+There are two credentials, and they grant different things.
+
+**Sign In** stores a username and password and establishes a session cookie.
+That is what the knowledge-base routes take — `/api/search`, `/api/content` —
+so the search tools need it.
+
+**Set Access Key** stores a key issued by `manage.py issue-key`. The backend
+accepts it as `Authorization: Bearer llmhell_…` on its `/v1` routes, which
+reach the *same* coding provider the cookie route does — so a key alone runs
+the agent, with no password stored anywhere. It does not grant search: ask the
+coder to search the knowledge base with only a key configured and the tool
+says so in as many words, rather than failing as a bare 401.
+
+Both can be set at once, and usually are. Signing out clears both, because
+leaving the key behind would mean a panel that still works after saying it had
+signed out.
+
 Run **Knowledge Base: Sign In** once. The password goes into the editor's
 secret storage — the OS keychain — and never into a settings file. The
 username is written to settings only after the credentials are known to work,
@@ -307,6 +365,7 @@ session is renewed and the request retried once.
 | `knowledgeBase.username` | — | Filled in by **Sign In**. |
 | `knowledgeBase.coder.maxAgentTurns` | `30` | Maximum tool rounds for `@coder` and the chat view. |
 | `knowledgeBase.coder.mode` | `manual` | Tool approval policy. |
+| `knowledgeBase.coder.contextTokens` | `524288` | The model's context window. `0` turns compaction off; the ring stays and says so. |
 | `knowledgeBase.coder.confirmTools` | `true` | Turns approval off entirely when false. |
 | `knowledgeBase.mcp.servers` | `{}` | Custom MCP servers — see above. |
 

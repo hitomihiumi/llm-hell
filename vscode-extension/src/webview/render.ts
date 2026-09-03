@@ -1,7 +1,12 @@
 import type { DiffLine, FileDiff } from "../diff.ts";
 import { highlight, languageFromPath } from "../highlight.ts";
 import { escapeHtml, renderMarkdown } from "../markdown.ts";
-import type { ChatMessageView, ContextItemView, ToolCallView } from "../webviewProtocol.ts";
+import type {
+  ChatMessageView,
+  ContextItemView,
+  ContextUsageView,
+  ToolCallView,
+} from "../webviewProtocol.ts";
 
 /**
  * Turning one transcript entry into HTML, as a string.
@@ -358,4 +363,107 @@ function renderToolResultBody(call: ToolCallView): string {
   if (!pathFor || result.startsWith("Error")) return escapeHtml(result);
   const language = languageFromPath(pathFor(call));
   return highlight(result, language);
+}
+
+/**
+ * How full the context is, as a ring.
+ *
+ * A ring rather than a number, because the number is an estimate and a
+ * precise-looking "12 431 tokens" claims more than it knows. The proportion
+ * is the part that is actually reliable, and a proportion is what a ring
+ * shows. The number is still there, in the tooltip, for anyone who wants it.
+ *
+ * The tooltip is drawn rather than left to the browser's `title`: a native
+ * one waits a second before appearing, is styled by the operating system
+ * rather than by the theme, and renders its line breaks differently on every
+ * platform. This one is CSS only - no positioning code, nothing to run on
+ * hover, and nothing that a re-render mid-stream can leave behind.
+ */
+export function renderUsageRing(usage: ContextUsageView): string {
+  // No budget means compaction is off. The ring still shows - it is a fixed
+  // part of the composer, and one that disappears is one nobody trusts - but
+  // it shows an empty track and says why.
+  const off = !usage.budget;
+  const fraction = off ? 0 : Math.min(1, usage.used / usage.budget);
+  const percent = Math.round(fraction * 100);
+  // A circle of r=6 is 37.7 long; the dash carries the filled part.
+  const circumference = 2 * Math.PI * 6;
+  const filled = (circumference * fraction).toFixed(2);
+  const level = off ? "off" : percent >= 90 ? "full" : percent >= 70 ? "high" : "normal";
+
+  const headline = off
+    ? `${usage.used.toLocaleString("en-US")} tokens, no limit set`
+    : `${usage.used.toLocaleString("en-US")} of ${usage.budget.toLocaleString("en-US")} tokens`;
+  const note = off
+    ? "Compaction is off. Set knowledgeBase.coder.contextTokens to the model's window."
+    : usage.compacted
+      ? `Just compacted: ${[
+          usage.compacted.folded ? `${usage.compacted.folded} tool result(s) folded` : "",
+          usage.compacted.dropped ? `${usage.compacted.dropped} message(s) dropped` : "",
+        ]
+          .filter(Boolean)
+          .join(", ")}.`
+      : level === "normal"
+        ? ""
+        : "Older tool results are folded away as this fills.";
+
+  const label = off
+    ? `Context: ${headline}. Estimated.`
+    : `Context: ${headline}, ${percent} percent full. Estimated.`;
+
+  const tip =
+    '<span class="usage-tip" role="tooltip" aria-hidden="true">' +
+    `<span class="usage-tip-head">Context ${off ? "" : `<b>${percent}%</b>`}</span>` +
+    `<span class="usage-tip-line">${escapeHtml(headline)}</span>` +
+    '<span class="usage-tip-note">Estimated, not counted by a tokenizer.</span>' +
+    (note ? `<span class="usage-tip-note">${escapeHtml(note)}</span>` : "") +
+    '<span class="usage-tip-note usage-tip-hint">Click for a breakdown.</span>' +
+    "</span>";
+
+  return (
+    `<span class="usage usage-${level}" tabindex="0" role="button" aria-expanded="false" ` +
+    `data-usage-toggle="true" aria-label="${escapeHtml(label)}">` +
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">' +
+    '<circle class="usage-track" cx="8" cy="8" r="6" fill="none" stroke-width="2.5"/>' +
+    `<circle class="usage-fill" cx="8" cy="8" r="6" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="${filled} ${circumference.toFixed(2)}" transform="rotate(-90 8 8)"/>` +
+    "</svg>" +
+    tip +
+    renderUsageDetails(usage) +
+    "</span>"
+  );
+}
+
+/**
+ * The breakdown, shown on click.
+ *
+ * "How full" is the question the ring answers; "full of what" is the one it
+ * provokes, and the answer is only useful if it maps onto something a person
+ * can do - unpin a file, switch an MCP server off, start a new chat. So the
+ * rows are the categories, largest first, each with the share it takes.
+ */
+function renderUsageDetails(usage: ContextUsageView): string {
+  const rows = usage.categories ?? [];
+  const total = rows.reduce((sum, row) => sum + row.tokens, 0);
+  const body = rows.length
+    ? rows
+        .map((row) => {
+          const share = total ? Math.round((row.tokens / total) * 100) : 0;
+          return (
+            '<span class="usage-row">' +
+            `<span class="usage-row-name">${escapeHtml(row.name)}</span>` +
+            `<span class="usage-row-bar"><span style="width:${share}%"></span></span>` +
+            `<span class="usage-row-tokens">${row.tokens.toLocaleString("en-US")}</span>` +
+            "</span>"
+          );
+        })
+        .join("")
+    : '<span class="usage-row-empty">Nothing sent yet.</span>';
+
+  return (
+    '<span class="usage-details" aria-hidden="true">' +
+    '<span class="usage-details-head">What is using the context</span>' +
+    body +
+    `<span class="usage-details-total">${total.toLocaleString("en-US")} tokens, estimated</span>` +
+    "</span>"
+  );
 }

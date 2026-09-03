@@ -2,9 +2,10 @@ import type {
   AgentMode,
   ChatMessageView,
   ContextItemView,
+  ContextUsageView,
   HostMessage,
 } from "../webviewProtocol.ts";
-import { renderContextItems, renderMessage, renderWelcome } from "./render.ts";
+import { renderContextItems, renderMessage, renderUsageRing, renderWelcome } from "./render.ts";
 import { connectVsCodeApi } from "./vscodeApi.ts";
 
 /**
@@ -22,6 +23,7 @@ let messages: ChatMessageView[] = [];
 let contextItems: ContextItemView[] = [];
 let agentMode: AgentMode = "manual";
 let sending = false;
+let usage: ContextUsageView | undefined;
 
 const root = document.getElementById("root");
 if (!root) throw new Error("no #root element in the panel's own HTML");
@@ -45,6 +47,7 @@ root.innerHTML = `
           <option value="assisted">Assisted</option>
           <option value="autonomous">Autonomous</option>
         </select>
+        <span class="usage-slot" id="usage-slot"></span>
         <span class="composer-spacer"></span>
         <button type="button" id="stop-button" class="icon-button icon-button-stop" hidden title="Stop" aria-label="Stop">
           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor"/></svg>
@@ -65,6 +68,7 @@ const banner = requireEl<HTMLDivElement>("signin-banner");
 const attachButton = requireEl<HTMLButtonElement>("attach-button");
 const agentModeEl = requireEl<HTMLSelectElement>("agent-mode");
 const contextChipsEl = requireEl<HTMLDivElement>("context-chips");
+const usageSlotEl = requireEl<HTMLSpanElement>("usage-slot");
 
 function requireEl<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -183,6 +187,31 @@ function setAgentMode(next: AgentMode): void {
   vscode.post({ type: "setAgentMode", mode: next });
 }
 
+/**
+ * Whether the breakdown is open.
+ *
+ * Kept here rather than in the DOM because the slot's markup is replaced
+ * whenever the numbers change - which, during a turn, is every round.
+ */
+let usageOpen = false;
+
+function renderUsage(): void {
+  usageSlotEl.innerHTML = usage ? renderUsageRing(usage) : "";
+  applyUsageOpen();
+}
+
+function applyUsageOpen(): void {
+  const ring = usageSlotEl.querySelector<HTMLElement>("[data-usage-toggle]");
+  if (!ring) return;
+  ring.classList.toggle("usage-open", usageOpen);
+  ring.setAttribute("aria-expanded", String(usageOpen));
+}
+
+function setUsageOpen(value: boolean): void {
+  usageOpen = value;
+  applyUsageOpen();
+}
+
 function setSending(value: boolean): void {
   sending = value;
   sendButton.hidden = value;
@@ -250,6 +279,18 @@ contextChipsEl.addEventListener("click", (event) => {
 // would leak exactly as many as the transcript is long.
 
 // Before the click that would never arrive.
+usageSlotEl.addEventListener("click", (event) => {
+  if (!(event.target as HTMLElement).closest("[data-usage-toggle]")) return;
+  event.stopPropagation();
+  setUsageOpen(!usageOpen);
+});
+
+// Anywhere else closes it, the way every other popover in the editor behaves.
+document.addEventListener("click", () => setUsageOpen(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && usageOpen) setUsageOpen(false);
+});
+
 messagesEl.addEventListener("mousedown", (event) => {
   const summary = (event.target as HTMLElement).closest<HTMLElement>("summary");
   if (!summary) return;
@@ -369,6 +410,10 @@ vscode.onMessage((message: HostMessage) => {
       // "nothing happened yet" state where there is nothing to check.
       setSending(messages.at(-1)?.status === "streaming");
       renderMessages();
+      break;
+    case "usage":
+      usage = message.usage;
+      renderUsage();
       break;
     case "context":
       contextItems = message.items;

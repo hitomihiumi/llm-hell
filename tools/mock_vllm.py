@@ -237,6 +237,18 @@ Motor outputs S1-S4 run along the right edge, each with an adjacent GND.
 A jumper marked JP1 selects between 5V and 9V on the VTX pad."""
 
 
+def _wants_cache_hit(body: dict[str, Any]) -> bool:
+    """A test asking the mock to simulate a prompt-cache hit, the same way
+    _wants_sql/_wants_plan gate on a marker rather than on real content -
+    there is no cache to actually simulate against, so a request opts in by
+    naming it."""
+    for message in body.get("messages", []):
+        content = message.get("content")
+        if isinstance(content, str) and "SIMULATE_CACHE_HIT" in content:
+            return True
+    return False
+
+
 def _wants_vision(body: dict[str, Any]) -> bool:
     """An OpenAI multimodal request: some message's content is a list with an
     image part in it, rather than a plain string."""
@@ -272,7 +284,9 @@ def _chunk(id_: str, model: str, delta: dict[str, Any], finish_reason: str | Non
     return f"data: {json.dumps(payload)}\n\n"
 
 
-def _usage_chunk(id_: str, model: str, prompt_tokens: int, completion_tokens: int) -> str:
+def _usage_chunk(
+    id_: str, model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
+) -> str:
     """The client always sends `stream_options: {include_usage: true}`, so
     a real vLLM/OpenAI server appends one extra chunk after the
     finish_reason chunk with empty `choices` and a populated `usage`
@@ -291,6 +305,11 @@ def _usage_chunk(id_: str, model: str, prompt_tokens: int, completion_tokens: in
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
+            **(
+                {"prompt_tokens_details": {"cached_tokens": cached_tokens}}
+                if cached_tokens
+                else {}
+            ),
         },
     }
     return f"data: {json.dumps(payload)}\n\n"
@@ -357,7 +376,10 @@ async def _stream_completion(body: dict[str, Any]):
         completion_text += content_text
 
     prompt_tokens = _estimate_tokens(json.dumps(body.get("messages", [])))
-    yield _usage_chunk(completion_id, model, prompt_tokens, _estimate_tokens(completion_text))
+    cached_tokens = prompt_tokens // 2 if _wants_cache_hit(body) else 0
+    yield _usage_chunk(
+        completion_id, model, prompt_tokens, _estimate_tokens(completion_text), cached_tokens
+    )
     yield "data: [DONE]\n\n"
 
 
@@ -395,6 +417,7 @@ def _full_completion(body: dict[str, Any]) -> dict[str, Any]:
 
     prompt_tokens = _estimate_tokens(json.dumps(body.get("messages", [])))
     completion_tokens = _estimate_tokens(str(message))
+    cached_tokens = prompt_tokens // 2 if _wants_cache_hit(body) else 0
 
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
@@ -406,6 +429,11 @@ def _full_completion(body: dict[str, Any]) -> dict[str, Any]:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
+            **(
+                {"prompt_tokens_details": {"cached_tokens": cached_tokens}}
+                if cached_tokens
+                else {}
+            ),
         },
     }
 

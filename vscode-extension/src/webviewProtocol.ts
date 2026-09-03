@@ -115,12 +115,29 @@ export interface ConversationSummary {
   messages: ChatMessageView[];
 }
 
+/**
+ * How full the model's context is, as the composer's ring shows it.
+ *
+ * An estimate, and labelled as one wherever it is shown: a real tokenizer
+ * would be a model-specific dependency, and the question this answers - "is
+ * this conversation close to too big" - does not need the exact number.
+ */
+export interface ContextUsageView {
+  used: number;
+  budget: number;
+  /** Set on the pass that folded something away, so the tooltip can say so. */
+  compacted?: { folded: number; dropped: number };
+  /** Where the context went, largest first - shown when the ring is clicked. */
+  categories?: { name: string; tokens: number }[];
+}
+
 /** Host -> webview. */
 export type HostMessage =
   | { type: "init"; signedIn: boolean; agentMode: AgentMode }
   | { type: "signedIn"; value: boolean }
   | { type: "messages"; messages: ChatMessageView[] }
   | { type: "context"; items: ContextItemView[] }
+  | { type: "usage"; usage: ContextUsageView }
   | { type: "prefill"; text: string }
   | { type: "error"; text: string };
 

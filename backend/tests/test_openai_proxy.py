@@ -369,3 +369,88 @@ async def test_chat_completions_coding_provider_streaming(authed_client, test_db
     assert '"content": "world"' in raw
     assert '"finish_reason": "stop"' in raw
     assert "data: [DONE]\n\n" in raw
+
+
+# --- cached tokens -----------------------------------------------------------
+#
+# `SIMULATE_CACHE_HIT` is a marker mock_vllm.py looks for (see
+# _wants_cache_hit) - there is no real cache to trigger, so a test opts in by
+# name rather than the mock reporting one unconditionally and hiding a
+# regression where a real endpoint never sends the field at all.
+
+
+@pytest.mark.asyncio
+async def test_cached_tokens_recorded_non_streaming(authed_client, test_db_engine) -> None:
+    await _seed_endpoint(test_db_engine)
+
+    response = await authed_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "glm-4.7",
+            "stream": False,
+            "messages": [{"role": "user", "content": "SIMULATE_CACHE_HIT please"}],
+        },
+        headers={"x-session-affinity": "sess-cache-full"},
+    )
+    assert response.status_code == 200
+
+    session_maker = async_sessionmaker(test_db_engine, expire_on_commit=False, class_=AsyncSession)
+    async with session_maker() as session:
+        row = (
+            await session.execute(select(LlmRequest).where(LlmRequest.session_id == "sess-cache-full"))
+        ).scalar_one()
+        assert row.tokens_cached > 0
+        # A subset of the prompt, never more of it.
+        assert row.tokens_cached <= row.tokens_prompt
+
+
+@pytest.mark.asyncio
+async def test_cached_tokens_recorded_streaming(authed_client, test_db_engine) -> None:
+    await _seed_endpoint(test_db_engine)
+
+    async with authed_client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "glm-4.7",
+            "stream": True,
+            "messages": [{"role": "user", "content": "SIMULATE_CACHE_HIT please"}],
+        },
+        headers={"x-session-affinity": "sess-cache-stream"},
+    ) as response:
+        assert response.status_code == 200
+        async for _ in response.aiter_text():
+            pass
+
+    session_maker = async_sessionmaker(test_db_engine, expire_on_commit=False, class_=AsyncSession)
+    async with session_maker() as session:
+        row = (
+            await session.execute(select(LlmRequest).where(LlmRequest.session_id == "sess-cache-stream"))
+        ).scalar_one()
+        assert row.tokens_cached > 0
+        assert row.tokens_cached <= row.tokens_prompt
+
+
+@pytest.mark.asyncio
+async def test_no_cache_hit_records_zero_not_none(authed_client, test_db_engine) -> None:
+    """A provider that never reports the field must not be indistinguishable
+    from a crash - the column defaults to 0, not null, and stays 0."""
+    await _seed_endpoint(test_db_engine)
+
+    response = await authed_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "glm-4.7",
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        headers={"x-session-affinity": "sess-no-cache"},
+    )
+    assert response.status_code == 200
+
+    session_maker = async_sessionmaker(test_db_engine, expire_on_commit=False, class_=AsyncSession)
+    async with session_maker() as session:
+        row = (
+            await session.execute(select(LlmRequest).where(LlmRequest.session_id == "sess-no-cache"))
+        ).scalar_one()
+        assert row.tokens_cached == 0

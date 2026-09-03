@@ -130,6 +130,27 @@ def _upstream_headers(endpoint: ModelEndpoint) -> dict[str, str]:
     return headers
 
 
+def _extract_cached_tokens(usage: dict[str, Any]) -> int:
+    """How many prompt tokens the provider served from its own cache.
+
+    OpenAI's own shape, which OpenRouter normalises every routed provider
+    into, nests it under `prompt_tokens_details.cached_tokens`. A server
+    speaking DeepSeek's native API instead reports it unnested, as
+    `prompt_cache_hit_tokens` - checked second because every endpoint this
+    proxy has ever pointed at is either OpenAI-shaped already or reached
+    through OpenRouter, which normalises it there. A server that reports
+    neither is not a broken integration - most self-hosted vLLM builds do not
+    do prompt caching at all - so this returns 0 rather than guessing.
+    """
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if isinstance(cached, int):
+            return cached
+    native = usage.get("prompt_cache_hit_tokens")
+    return native if isinstance(native, int) else 0
+
+
 async def _stream_upstream_body(
     upstream_response: httpx.Response,
     *,
@@ -162,6 +183,7 @@ async def _stream_upstream_body(
                 if usage:
                     outcome.prompt_tokens = usage.get("prompt_tokens") or 0
                     outcome.completion_tokens = usage.get("completion_tokens") or 0
+                    outcome.cached_tokens = _extract_cached_tokens(usage)
 
                 choices = event.get("choices") or []
                 if not choices:
@@ -195,6 +217,7 @@ def _parse_full_response_metrics(body: bytes, outcome: RequestOutcome) -> None:
     usage = payload.get("usage") or {}
     outcome.prompt_tokens = usage.get("prompt_tokens") or 0
     outcome.completion_tokens = usage.get("completion_tokens") or 0
+    outcome.cached_tokens = _extract_cached_tokens(usage)
 
     choices = payload.get("choices") or []
     if not choices:

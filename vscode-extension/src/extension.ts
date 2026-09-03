@@ -73,7 +73,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const chatView = new KnowledgeBaseChatViewProvider(context, client, documents, () => {
     const settings = readSettings();
-    return { maxAgentTurns: settings.maxAgentTurns, agentMode: settings.agentMode };
+    return {
+      maxAgentTurns: settings.maxAgentTurns,
+      agentMode: settings.agentMode,
+      contextTokens: settings.contextTokens,
+    };
   });
 
   // Selection changes arrive per keystroke while a user drags a selection.
@@ -154,6 +158,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand("knowledgeBase.signIn", authenticate),
 
+    vscode.commands.registerCommand("knowledgeBase.setAccessKey", async () => {
+      await setAccessKey(client);
+      await setSignedIn(await client.hasCredentials());
+      await chatView.refreshSignedIn();
+    }),
+
     vscode.commands.registerCommand("knowledgeBase.signOut", async () => {
       await client.signOut();
       await setSignedIn(false);
@@ -204,6 +214,7 @@ interface Settings {
   username: string;
   maxAgentTurns: number;
   agentMode: AgentMode;
+  contextTokens: number;
 }
 
 export function readSettings(): Settings {
@@ -211,8 +222,9 @@ export function readSettings(): Settings {
   return {
     baseUrl: config.get<string>("baseUrl", "https://llmhell.borzo.ai"),
     username: config.get<string>("username", ""),
-    maxAgentTurns: config.get<number>("coder.maxAgentTurns", 30),
+    maxAgentTurns: config.get<number>("coder.maxAgentTurns", 60),
     agentMode: config.get<AgentMode>("coder.mode", "manual"),
+    contextTokens: config.get<number>("coder.contextTokens", 524288),
   };
 }
 
@@ -232,6 +244,54 @@ export function prefill(): string {
 
   const range = editor.document.getWordRangeAtPosition(editor.selection.active);
   return range ? editor.document.getText(range) : "";
+}
+
+/**
+ * Paste an access key, or clear the one already stored.
+ *
+ * The key is what grants the model: the backend accepts it on the `/v1`
+ * routes, which reach the same coding provider the cookie route does, so a
+ * key alone runs the agent with no password stored anywhere. It does not
+ * cover the knowledge-base routes - those are cookie-only - and the prompt
+ * says so rather than leaving the search tools to fail mysteriously later.
+ *
+ * `password: true` on the box, so a key does not sit in plain sight in a
+ * screen share, and it goes to the editor's secret storage rather than to a
+ * settings file.
+ */
+async function setAccessKey(client: KnowledgeBaseClient): Promise<void> {
+  const existing = await client.accessKey();
+  if (existing) {
+    const action = await vscode.window.showQuickPick(["Replace", "Remove"], {
+      title: "Access key",
+      placeHolder: "A key is stored for this backend",
+    });
+    if (!action) return;
+    if (action === "Remove") {
+      await client.setAccessKey(undefined);
+      vscode.window.showInformationMessage("Access key removed.");
+      return;
+    }
+  }
+
+  const key = await vscode.window.showInputBox({
+    title: "Backend access key",
+    prompt:
+      "Issued by `manage.py issue-key`. It grants the model; knowledge-base search still needs a sign-in.",
+    placeHolder: "llmhell_…",
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (value) =>
+      !value.trim() || value.trim().startsWith("llmhell_")
+        ? undefined
+        : "A backend key starts with `llmhell_`.",
+  });
+  if (key === undefined) return;
+
+  await client.setAccessKey(key.trim() || undefined);
+  vscode.window.showInformationMessage(
+    key.trim() ? "Access key stored. The coder will use it." : "Access key removed.",
+  );
 }
 
 /** Returns whether a session was established, so the caller can act on it. */

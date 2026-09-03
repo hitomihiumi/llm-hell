@@ -96,6 +96,12 @@
             "Ask about nothing. File paths outside the workspace are still refused."
           ],
           "description": "Tool approval policy for the coding agent."
+        },
+        "knowledgeBase.coder.contextTokens": {
+          "type": "number",
+          "default": 524288,
+          "minimum": 0,
+          "markdownDescription": "The context window of the model `AGENT_MODEL_ID` points at, in tokens. When a turn approaches it, the oldest tool results are folded away and then the oldest messages dropped, so a long turn does not die on a refused request. The ring in the composer shows how full it is - an estimate, not a tokenizer - and clicking it breaks the total down by what is consuming it. `0` turns compaction off; the ring stays, and says so."
         }
       }
     },
@@ -122,7 +128,7 @@
       {
         "view": "knowledgeBase.chat",
         "when": "!knowledgeBase.signedIn",
-        "contents": "The coder needs an account on the backend.\n[Sign in](command:knowledgeBase.signIn)\n\n[Open settings](command:workbench.action.openSettings?%22knowledgeBase%22)"
+        "contents": "The coder needs access to the backend.\n[Sign in](command:knowledgeBase.signIn)\n\nOr paste an access key, which grants the model without a password — knowledge-base search still needs a sign-in.\n[Set access key](command:knowledgeBase.setAccessKey)\n\n[Open settings](command:workbench.action.openSettings?%22knowledgeBase%22)"
       }
     ],
     "commands": [
@@ -192,6 +198,12 @@
         "title": "Set Backend URL",
         "category": "Knowledge Base",
         "icon": "$(server-environment)"
+      },
+      {
+        "command": "knowledgeBase.setAccessKey",
+        "title": "Set Access Key",
+        "category": "Knowledge Base",
+        "icon": "$(key)"
       }
     ],
     "menus": {

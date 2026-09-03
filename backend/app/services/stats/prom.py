@@ -54,6 +54,65 @@ LLM_TOKENS_TOTAL = Counter(
     ["model", "role", "kind"],  # kind: prompt | completion | reasoning
 )
 
+# A separate counter, not a fourth `kind` on LLM_TOKENS_TOTAL: cached tokens
+# are a *subset* of prompt tokens (the upstream's own `prompt_tokens` already
+# includes them), not a fourth disjoint category. Folding them into the same
+# counter under their own kind would double-count anything that sums across
+# kind, e.g. the "total tokens" panel. This is meant to be read alongside
+# `llm_tokens_total{kind="prompt"}`, as a fraction of it - the cache hit rate.
+LLM_CACHED_TOKENS_TOTAL = Counter(
+    "llm_cached_tokens_total",
+    "Prompt tokens served from the provider's own cache - a subset of "
+    'llm_tokens_total{kind="prompt"}, not additional to it.',
+    ["model", "role"],
+)
+
+# Same values as LLM_TOKENS_TOTAL, as a Histogram rather than a Counter: a
+# running total answers "how many tokens so far", never "what does one
+# request typically cost" - for that, PromQL needs a distribution to run
+# histogram_quantile() over. Token counts here span three orders of
+# magnitude (a one-line answer to a context near the model's full window),
+# so the buckets are powers of two rather than the linear-ish spacing the
+# time-based histograms above use.
+_TOKEN_BUCKETS = (
+    16,
+    64,
+    256,
+    1024,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    262144,
+    524288,
+    float("inf"),
+)
+
+LLM_TOKENS_PER_REQUEST = Histogram(
+    "llm_tokens_per_request",
+    "Tokens in a single request, by kind - for percentiles (median, p95) rather than totals.",
+    ["model", "role", "kind"],  # kind: prompt | completion | reasoning | cached
+    buckets=_TOKEN_BUCKETS,
+)
+
+# Mirrors cost_usd in `llm_requests`, which was Postgres-only until now - a
+# $/hour burn-rate panel and an error-budget-style alert both want this as a
+# live counter rather than a value queried out of Postgres on a timer.
+LLM_COST_USD_TOTAL = Counter(
+    "llm_cost_usd_total",
+    "Total cost of proxied requests, in USD, from each endpoint's configured price.",
+    ["model", "role"],
+)
+
+LLM_COST_USD_PER_REQUEST = Histogram(
+    "llm_cost_usd_per_request",
+    "Cost of a single request, in USD - for the median/p95 cost panel.",
+    ["model", "role"],
+    buckets=(0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, float("inf")),
+)
+
 LLM_ERRORS_TOTAL = Counter(
     "llm_errors_total",
     "Total chat completion requests that raised an error.",

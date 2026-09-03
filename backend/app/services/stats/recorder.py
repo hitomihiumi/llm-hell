@@ -20,9 +20,13 @@ from app.models.llm_request import LlmRequest
 from app.models.user import User
 from app.services.llm.tokenizer import heuristic_token_count
 from app.services.stats.prom import (
+    LLM_CACHED_TOKENS_TOTAL,
+    LLM_COST_USD_PER_REQUEST,
+    LLM_COST_USD_TOTAL,
     LLM_ERRORS_TOTAL,
     LLM_OUTPUT_TPS,
     LLM_REQUEST_DURATION_SECONDS,
+    LLM_TOKENS_PER_REQUEST,
     LLM_TOKENS_TOTAL,
     LLM_TTFT_SECONDS,
 )
@@ -40,6 +44,12 @@ class RequestOutcome:
     tool_call_count: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # A subset of prompt_tokens, not additional to it - how many of them the
+    # provider served from its own cache. 0 whether nothing was cached or the
+    # provider simply does not report the figure; both code paths in
+    # app.api.openai_proxy read it from the same place an OpenAI-compatible
+    # `usage` object would put it, `prompt_tokens_details.cached_tokens`.
+    cached_tokens: int = 0
     reasoning_text: str = ""
     ttft_seconds: float | None = None
     started_at: float = field(default_factory=time.monotonic)
@@ -121,6 +131,7 @@ async def record_request(
             tokens_prompt=outcome.prompt_tokens,
             tokens_completion=outcome.completion_tokens,
             tokens_reasoning=reasoning_tokens,
+            tokens_cached=outcome.cached_tokens,
             cost_usd=cost_usd,
             ttft_ms=int(outcome.ttft_seconds * 1000) if outcome.ttft_seconds is not None else None,
             duration_ms=int(duration_seconds * 1000),
@@ -142,12 +153,23 @@ async def record_request(
     if outcome.completion_tokens > 0 and duration_seconds > 0:
         LLM_OUTPUT_TPS.labels(**labels).observe(outcome.completion_tokens / duration_seconds)
 
-    LLM_TOKENS_TOTAL.labels(model=endpoint.model_id, role=endpoint.role, kind="prompt").inc(outcome.prompt_tokens)
-    LLM_TOKENS_TOTAL.labels(model=endpoint.model_id, role=endpoint.role, kind="completion").inc(
-        outcome.completion_tokens
-    )
+    token_labels = {"model": endpoint.model_id, "role": endpoint.role}
+    LLM_TOKENS_TOTAL.labels(**token_labels, kind="prompt").inc(outcome.prompt_tokens)
+    LLM_TOKENS_PER_REQUEST.labels(**token_labels, kind="prompt").observe(outcome.prompt_tokens)
+    LLM_TOKENS_TOTAL.labels(**token_labels, kind="completion").inc(outcome.completion_tokens)
+    LLM_TOKENS_PER_REQUEST.labels(**token_labels, kind="completion").observe(outcome.completion_tokens)
     if reasoning_tokens:
-        LLM_TOKENS_TOTAL.labels(model=endpoint.model_id, role=endpoint.role, kind="reasoning").inc(reasoning_tokens)
+        LLM_TOKENS_TOTAL.labels(**token_labels, kind="reasoning").inc(reasoning_tokens)
+        LLM_TOKENS_PER_REQUEST.labels(**token_labels, kind="reasoning").observe(reasoning_tokens)
+    if outcome.cached_tokens:
+        # Deliberately not added to LLM_TOKENS_TOTAL under any kind - see the
+        # comment on LLM_CACHED_TOKENS_TOTAL. It is already inside
+        # prompt_tokens, both here and in the per-request histogram below.
+        LLM_CACHED_TOKENS_TOTAL.labels(**token_labels).inc(outcome.cached_tokens)
+        LLM_TOKENS_PER_REQUEST.labels(**token_labels, kind="cached").observe(outcome.cached_tokens)
+
+    LLM_COST_USD_TOTAL.labels(**token_labels).inc(cost_usd)
+    LLM_COST_USD_PER_REQUEST.labels(**token_labels).observe(cost_usd)
 
     if outcome.error_type:
         LLM_ERRORS_TOTAL.labels(model=endpoint.model_id, role=endpoint.role, type=outcome.error_type).inc()

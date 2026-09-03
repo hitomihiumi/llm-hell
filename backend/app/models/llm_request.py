@@ -48,6 +48,12 @@ class LlmRequest(Base):
     tokens_prompt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tokens_completion: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tokens_reasoning: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # How many of tokens_prompt were served from the provider's own prompt
+    # cache, i.e. not billed and not recomputed. 0 both when nothing was
+    # cached and when the upstream never reports the figure at all - the two
+    # are indistinguishable from here, which is a fact about the provider,
+    # not something this column pretends to resolve.
+    tokens_cached: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
     ttft_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

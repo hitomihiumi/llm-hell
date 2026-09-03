@@ -39,6 +39,7 @@ const SESSION_COOKIE = "kb_session";
 const CSRF_COOKIE = "kb_csrf";
 const KEPT_COOKIES = [SESSION_COOKIE, CSRF_COOKIE] as const;
 const PASSWORD_KEY = "knowledgeBase.password";
+const ACCESS_KEY = "knowledgeBase.accessKey";
 
 interface Credentials {
   username: string;
@@ -48,6 +49,8 @@ interface Credentials {
 interface RequestOptions {
   accept?: string;
   signal?: AbortSignal;
+  /** An access key, sent instead of the session cookie. */
+  bearer?: string;
 }
 
 /**
@@ -99,8 +102,33 @@ export class KnowledgeBaseClient {
    * offer "Sign in" to somebody who already had.
    */
   async hasCredentials(): Promise<boolean> {
+    // A key is enough to work: it grants the model, which is what the panel
+    // is for. It grants no knowledge-base search, but nagging "sign in" at
+    // somebody whose coder runs would be the wrong thing to say.
+    if (await this.accessKey()) return true;
     const { username } = this.settings();
     return Boolean(username) && Boolean(await this.secrets.get(PASSWORD_KEY));
+  }
+
+  /**
+   * An access key for the backend, which is what grants the model.
+   *
+   * The backend issues these with `manage.py issue-key` and accepts them as
+   * `Authorization: Bearer llmhell_...` on its `/v1` routes - which reach the
+   * same coding provider the cookie route does. So a key alone is enough to
+   * run the agent, with no username and no password stored anywhere.
+   *
+   * It does **not** cover the knowledge-base routes: `/api/search` and
+   * `/api/content` are cookie-only, so the search tools still need a
+   * sign-in. Both can be configured at once, and usually are.
+   */
+  async accessKey(): Promise<string | undefined> {
+    return (await this.secrets.get(ACCESS_KEY)) || undefined;
+  }
+
+  async setAccessKey(key: string | undefined): Promise<void> {
+    if (key) await this.secrets.store(ACCESS_KEY, key);
+    else await this.secrets.delete(ACCESS_KEY);
   }
 
   /** Store a password and prove it works by signing in with it. */
@@ -133,6 +161,9 @@ export class KnowledgeBaseClient {
     }
     this.cookies.clear();
     await this.secrets.delete(PASSWORD_KEY);
+    // The key grants the model on its own, so leaving it behind would mean a
+    // panel that still works after saying it signed out.
+    await this.secrets.delete(ACCESS_KEY);
   }
 
   async search(
@@ -150,8 +181,11 @@ export class KnowledgeBaseClient {
   /**
    * OpenAI-compatible chat completions backed by the backend's coding provider.
    *
-   * The extension signs in with a session cookie, so this hits the
-   * `/api/chat/completions` route rather than the API-key `/v1` proxy.
+   * Two routes to the same place. With an access key configured this uses the
+   * `/v1` proxy and a bearer header; otherwise the cookie-authenticated
+   * `/api/chat/completions`. Both hand the request to the identical provider
+   * with the identical model id, so which one is in use changes nothing about
+   * the answer - only what had to be typed to get it.
    */
   async *chatCompletionsStream(
     messages: ChatMessage[],
@@ -166,10 +200,16 @@ export class KnowledgeBaseClient {
     if (tools?.length) {
       requestBody.tools = tools;
     }
-    const response = await this.authorised("POST", "/api/chat/completions", requestBody, {
-      accept: "text/event-stream",
-      signal,
-    });
+    const key = await this.accessKey();
+    const response = key
+      ? await this.keyed("POST", "/v1/chat/completions", key, requestBody, {
+          accept: "text/event-stream",
+          signal,
+        })
+      : await this.authorised("POST", "/api/chat/completions", requestBody, {
+          accept: "text/event-stream",
+          signal,
+        });
 
     const body = response.body;
     if (!body) {
@@ -300,7 +340,15 @@ export class KnowledgeBaseClient {
     const { username } = this.settings();
     const password = await this.secrets.get(PASSWORD_KEY);
     if (!username || !password) {
-      throw new AuthError("Not signed in.");
+      // Said in full, because there is a configuration in which the panel
+      // works and this still fails: an access key grants the model but not
+      // the knowledge base, and "Not signed in" alone would look like a bug
+      // to somebody whose coder is answering perfectly well.
+      throw new AuthError(
+        (await this.accessKey())
+          ? "The knowledge base needs a sign-in. The access key grants the model, not search."
+          : "Not signed in.",
+      );
     }
     await this.login({ username, password });
   }
@@ -322,6 +370,29 @@ export class KnowledgeBaseClient {
     }
   }
 
+  /**
+   * A request that carries a bearer key instead of a session.
+   *
+   * No sign-in to attempt and nothing to retry: a key either works or does
+   * not, and re-sending it would only ask the same question twice.
+   */
+  private async keyed(
+    method: string,
+    path: string,
+    key: string,
+    body?: unknown,
+    options: RequestOptions = {},
+  ): Promise<Response> {
+    const response = await this.send(method, path, body, { ...options, bearer: key });
+    if (response.status === 401 || response.status === 403) {
+      throw new AuthError(`The backend refused the access key: ${await describe(response)}`);
+    }
+    if (!response.ok) {
+      throw new ApiError(await describe(response), response.status);
+    }
+    return response;
+  }
+
   private async send(
     method: string,
     path: string,
@@ -331,8 +402,11 @@ export class KnowledgeBaseClient {
     const { baseUrl } = this.settings();
     const headers: Record<string, string> = { accept: options.accept ?? "application/json" };
 
+    if (options.bearer) {
+      headers.authorization = `Bearer ${options.bearer}`;
+    }
     const cookie = this.cookieHeader();
-    if (cookie) {
+    if (cookie && !options.bearer) {
       headers.cookie = cookie;
     }
     // Double-submit CSRF: the API rejects a cookie-authenticated write unless

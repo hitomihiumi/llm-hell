@@ -4,6 +4,7 @@ import {
   looksTruncated,
   renderContextItems,
   renderMessage,
+  renderUsageRing,
   renderWelcome,
 } from "../src/webview/render.ts";
 import type { ChatMessageView, MessagePart, ToolCallView } from "../src/webviewProtocol.ts";
@@ -773,4 +774,148 @@ test("a message id with a quote cannot break out of the key attribute", () => {
   );
 
   assert.ok(!html.includes('onclick="evil()'));
+});
+
+// --- the context ring ----------------------------------------------------------
+
+test("the ring carries a tooltip it draws itself, not the browser's", () => {
+  /* A native `title` waits a second, is styled by the OS rather than the
+     theme, and breaks its lines differently on every platform. */
+  const html = renderUsageRing({ used: 8192, budget: 32768 });
+
+  assert.ok(html.includes("<svg"));
+  assert.ok(html.includes('class="usage-tip"'));
+  assert.ok(!html.includes("title="), "no native tooltip to fight the drawn one");
+  assert.match(html, /Context <b>25%<\/b>/);
+  assert.match(html, /8,192 of 32,768 tokens/);
+});
+
+test("the tooltip says the number is an estimate, because it is", () => {
+  assert.match(renderUsageRing({ used: 100, budget: 1000 }), /Estimated, not counted/);
+});
+
+test("the tooltip is hidden from a screen reader, which reads the label instead", () => {
+  /* Both would say the same thing twice. */
+  const html = renderUsageRing({ used: 100, budget: 1000 });
+
+  assert.match(html, /class="usage-tip" role="tooltip" aria-hidden="true"/);
+  assert.match(html, /aria-label="Context: 100 of 1,000 tokens, 10 percent full\. Estimated\."/);
+});
+
+test("the ring can be reached by keyboard, or the tooltip is mouse-only", () => {
+  assert.match(renderUsageRing({ used: 1, budget: 2 }), /class="usage usage-[a-z]+" tabindex="0"/);
+});
+
+test("no budget still draws the ring, and says why it is empty", () => {
+  /* A gauge that disappears is one nobody trusts. With compaction off there
+     is no ceiling to be a fraction of, so the ring shows an empty track and
+     the tooltip says so. */
+  const html = renderUsageRing({ used: 500, budget: 0 });
+
+  assert.ok(html.includes("<svg"));
+  assert.ok(html.includes("usage-off"));
+  assert.match(html, /500 tokens, no limit set/);
+  assert.match(html, /Compaction is off/);
+});
+
+const DASH = /stroke-dasharray="([\d.]+)/;
+
+test("the arc grows with the fraction", () => {
+  const quarter = DASH.exec(renderUsageRing({ used: 250, budget: 1000 }));
+  const half = DASH.exec(renderUsageRing({ used: 500, budget: 1000 }));
+
+  assert.ok(quarter && half);
+  assert.ok(Number(half?.[1]) > Number(quarter?.[1]));
+});
+
+test("over budget fills the ring rather than overflowing it", () => {
+  const html = renderUsageRing({ used: 90_000, budget: 1_000 });
+  const dash = Number(DASH.exec(html)?.[1]);
+  const circumference = 2 * Math.PI * 6;
+
+  assert.ok(dash <= circumference + 0.01, `${dash} should not exceed ${circumference}`);
+  assert.ok(html.includes("usage-full"));
+});
+
+test("the ring is only coloured once it matters", () => {
+  assert.ok(renderUsageRing({ used: 100, budget: 1000 }).includes("usage-normal"));
+  assert.ok(renderUsageRing({ used: 750, budget: 1000 }).includes("usage-high"));
+  assert.ok(renderUsageRing({ used: 950, budget: 1000 }).includes("usage-full"));
+});
+
+test("a pass that compacted says what it folded", () => {
+  const html = renderUsageRing({
+    used: 500,
+    budget: 1000,
+    compacted: { folded: 3, dropped: 2 },
+  });
+
+  assert.match(html, /3 tool result\(s\) folded/);
+  assert.match(html, /2 message\(s\) dropped/);
+});
+
+test("a quiet ring says nothing about compaction, having nothing to say", () => {
+  const html = renderUsageRing({ used: 100, budget: 1000 });
+
+  assert.ok(!html.includes("folded away as this fills"));
+  assert.ok(!html.includes("Just compacted"));
+});
+
+// --- the breakdown, on click -----------------------------------------------------
+
+test("the ring is a button that says whether its breakdown is open", () => {
+  const html = renderUsageRing({ used: 100, budget: 1000 });
+
+  assert.match(html, /role="button"/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.match(html, /data-usage-toggle="true"/);
+});
+
+test("each category is a row with its share and its tokens", () => {
+  const html = renderUsageRing({
+    used: 1000,
+    budget: 10_000,
+    categories: [
+      { name: "Tool results", tokens: 750 },
+      { name: "Your messages", tokens: 250 },
+    ],
+  });
+
+  assert.match(html, /usage-row-name">Tool results/);
+  assert.match(html, /width:75%/);
+  assert.match(html, /usage-row-tokens">750/);
+  assert.match(html, /usage-row-name">Your messages/);
+  assert.match(html, /width:25%/);
+});
+
+test("the breakdown totals what it lists", () => {
+  const html = renderUsageRing({
+    used: 1000,
+    budget: 10_000,
+    categories: [
+      { name: "A", tokens: 1200 },
+      { name: "B", tokens: 800 },
+    ],
+  });
+
+  assert.match(html, /2,000 tokens, estimated/);
+});
+
+test("nothing sent yet says so, rather than showing an empty box", () => {
+  const html = renderUsageRing({ used: 0, budget: 1000, categories: [] });
+
+  assert.match(html, /Nothing sent yet/);
+});
+
+test("a category name cannot break out of the panel", () => {
+  /* Category names are ours today; the escaping is what keeps that from
+     mattering if one ever comes from a tool. */
+  const html = renderUsageRing({
+    used: 10,
+    budget: 100,
+    categories: [{ name: '<img src=x onerror="evil()">', tokens: 10 }],
+  });
+
+  assert.ok(!html.includes("<img"));
+  assert.ok(html.includes("&lt;img"));
 });
