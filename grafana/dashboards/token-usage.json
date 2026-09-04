@@ -73,7 +73,7 @@
     },
     {
       "id": 3,
-      "title": "Median tokens per request, by kind",
+      "title": "Median tokens per request",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -99,7 +99,7 @@
     },
     {
       "id": 4,
-      "title": "p95 tokens per request, by kind",
+      "title": "p95 tokens per request",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -125,70 +125,6 @@
     },
     {
       "id": 5,
-      "title": "Cost burn rate ($/hour)",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 16
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "3600 * sum(rate(llm_cost_usd_total[$__rate_interval])) by (model)",
-          "legendFormat": "{{model}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 6,
-      "title": "Median cost per request",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 16
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "histogram_quantile(0.5, sum(rate(llm_cost_usd_per_request_bucket[$__rate_interval])) by (le, model))",
-          "legendFormat": "{{model}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 7,
       "title": "Cache hit rate now",
       "type": "stat",
       "gridPos": {
@@ -219,7 +155,7 @@
       }
     },
     {
-      "id": 8,
+      "id": 6,
       "title": "Total tokens/sec",
       "type": "stat",
       "gridPos": {
@@ -244,7 +180,7 @@
       ]
     },
     {
-      "id": 9,
+      "id": 7,
       "title": "Cached tokens/sec",
       "type": "stat",
       "gridPos": {
@@ -269,39 +205,8 @@
       ]
     },
     {
-      "id": 10,
-      "title": "Cost/min",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 24
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "60 * sum(rate(llm_cost_usd_total[$__rate_interval]))"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      }
-    },
-    {
       "id": 11,
-      "title": "Token usage & cost by model",
+      "title": "Token usage by model",
       "type": "table",
       "gridPos": {
         "h": 8,
@@ -321,24 +226,12 @@
             "uid": "postgres"
           },
           "format": "table",
-          "rawSql": "SELECT model, count(*) AS \"requests\", sum(tokens_prompt) AS \"prompt_tokens\", sum(tokens_completion) AS \"completion_tokens\", sum(tokens_cached) AS \"cached_tokens\", sum(tokens_reasoning) AS \"reasoning_tokens\", round(100.0 * sum(tokens_cached) / nullif(sum(tokens_prompt), 0), 1) AS \"cache_hit_pct\", sum(cost_usd) AS \"cost_usd\" FROM llm_requests GROUP BY model ORDER BY sum(cost_usd) DESC"
+          "rawSql": "SELECT model, count(*) AS \"requests\", sum(tokens_prompt) AS \"prompt_tokens\", sum(tokens_completion) AS \"completion_tokens\", sum(tokens_cached) AS \"cached_tokens\", sum(tokens_reasoning) AS \"reasoning_tokens\", round(100.0 * sum(tokens_cached) / nullif(sum(tokens_prompt), 0), 2) AS \"cache_hit_pct\" FROM llm_requests GROUP BY model ORDER BY sum(tokens_prompt) DESC"
         }
       ],
       "fieldConfig": {
         "defaults": {},
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "cost_usd"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              }
-            ]
-          },
           {
             "matcher": {
               "id": "byName",
@@ -356,7 +249,7 @@
     },
     {
       "id": 12,
-      "title": "Token usage & cost by tester",
+      "title": "Token usage by tester",
       "type": "table",
       "gridPos": {
         "h": 8,
@@ -376,24 +269,12 @@
             "uid": "postgres"
           },
           "format": "table",
-          "rawSql": "SELECT u.username, count(*) AS \"requests\", sum(l.tokens_prompt) AS \"prompt_tokens\", sum(l.tokens_completion) AS \"completion_tokens\", sum(l.tokens_cached) AS \"cached_tokens\", round(100.0 * sum(l.tokens_cached) / nullif(sum(l.tokens_prompt), 0), 1) AS \"cache_hit_pct\", sum(l.cost_usd) AS \"cost_usd\" FROM llm_requests l JOIN users u ON u.id = l.user_id GROUP BY u.username ORDER BY sum(l.cost_usd) DESC"
+          "rawSql": "SELECT u.username, count(*) AS \"requests\", sum(l.tokens_prompt) AS \"prompt_tokens\", sum(l.tokens_completion) AS \"completion_tokens\", sum(l.tokens_cached) AS \"cached_tokens\", round(100.0 * sum(l.tokens_cached) / nullif(sum(l.tokens_prompt), 0), 2) AS \"cache_hit_pct\" FROM llm_requests l JOIN users u ON u.id = l.user_id GROUP BY u.username ORDER BY sum(l.tokens_prompt) DESC"
         }
       ],
       "fieldConfig": {
         "defaults": {},
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "cost_usd"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              }
-            ]
-          },
           {
             "matcher": {
               "id": "byName",
